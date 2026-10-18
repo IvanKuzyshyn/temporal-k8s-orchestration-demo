@@ -1,6 +1,6 @@
 # Temporal Kubernetes orchestration demo — design
 
-Status: Draft for approval
+Status: Approved
 Date: 2026-10-17
 Repository: `IvanKuzyshyn/temporal-k8s-orchestration-demo`
 
