@@ -1,0 +1,42 @@
+[
+  {
+    "schemaVersion": "1",
+    "workerName": "worker-a",
+    "taskQueue": "worker-a.v1.temporal",
+    "workflowType": "ExampleChildWorkflow",
+    "runAfter": "",
+    "sourceServiceName": "worker-a",
+    "sourceServiceNamespace": "temporal-demo-worker-a",
+    "sourceServiceUID": ""
+  },
+  {
+    "schemaVersion": "1",
+    "workerName": "worker-b",
+    "taskQueue": "worker-b.v1.temporal",
+    "workflowType": "ExampleChildWorkflow",
+    "runAfter": "worker-a",
+    "sourceServiceName": "worker-b",
+    "sourceServiceNamespace": "temporal-demo-worker-b",
+    "sourceServiceUID": ""
+  },
+  {
+    "schemaVersion": "1",
+    "workerName": "worker-c",
+    "taskQueue": "worker-c.v1.temporal",
+    "workflowType": "ExampleChildWorkflow",
+    "runAfter": "worker-a",
+    "sourceServiceName": "worker-c",
+    "sourceServiceNamespace": "temporal-demo-worker-c",
+    "sourceServiceUID": ""
+  },
+  {
+    "schemaVersion": "1",
+    "workerName": "worker-d",
+    "taskQueue": "worker-d.v1.temporal",
+    "workflowType": "ExampleChildWorkflow",
+    "runAfter": "worker-b,worker-c",
+    "sourceServiceName": "worker-d",
+    "sourceServiceNamespace": "temporal-demo-worker-d",
+    "sourceServiceUID": ""
+  }
+]
