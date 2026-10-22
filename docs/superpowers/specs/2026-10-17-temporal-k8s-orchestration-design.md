@@ -13,6 +13,9 @@ The main learning goal is the interaction among these systems, not production in
 ## 2. Agreed requirements
 
 - Run the complete integration locally on Kubernetes using kind.
+- Place every worker service in its own Kubernetes namespace and the orchestrator in a separate namespace.
+- Use PostgreSQL-backed self-hosted Temporal for local development, not the SQLite-based `temporal server start-dev` command.
+- Every implementation task must have a definition of done, reproducible local verification, and its own implementation PR. Introduce CI with the first task and extend it incrementally.
 - Use Temporal for parent and child workflow orchestration.
 - Implement an orchestrator and a reusable worker service in Go, using the Temporal Go SDK and chi.
 - Give each logical worker a stable task queue, such as `<service-name>.v1.temporal`. Queues are shared across runs, not created per execution.
@@ -29,11 +32,12 @@ The main learning goal is the interaction among these systems, not production in
 
 The following are design recommendations, not previously agreed requirements:
 
-- One application namespace and one Temporal namespace for the initial demo; dependency names are Kubernetes Service names within the application namespace.
+- Orchestrator namespace `temporal-demo-orchestrator`; worker namespaces `temporal-demo-worker-a` through `temporal-demo-worker-d`, each holding one logical worker service. Use one Temporal namespace, `default`, independent of Kubernetes namespaces.
+- Worker namespaces carry `temporal-demo.io/worker-namespace: "true"`. Discover these namespaces dynamically; dependencies remain globally unique Service names across the demo's worker namespaces. Reject duplicate worker identities rather than resolving them ambiguously.
 - One always-running orchestrator replica containing both the HTTP API and the parent-workflow worker.
 - One reusable worker binary and image, deployed as several logical workers.
 - One shared child workflow type and activity contract across all example workers.
-- A single Temporal development-server instance for the first iteration. Persistence is optional and its behavior must be documented; this is not a production Temporal deployment.
+- A minimal single-instance self-hosted Temporal server backed by PostgreSQL for both default and visibility persistence, with pinned schema setup/migration tooling. Run PostgreSQL on a named volume in Compose and a PVC in kind. This is a development setup, not production HA.
 - One root Go module, with the service implementations under `services/`.
 - No public ingress: access the API and Temporal UI with port-forwarding.
 - No worker removal or incompatible worker upgrade while demonstration runs are active.
@@ -72,7 +76,7 @@ metadata:
     temporal-worker-run-after: "worker-a,worker-b"
 ```
 
-The worker identity is the Service name. For the initial schema, the task queue is derived as `<service-name>.v1.temporal`, and the child workflow type is fixed as `ExampleChildWorkflow`. These are application contracts, not features inferred from Temporal.
+The worker identity is the Service name and must be unique across registered worker namespaces. Namespace separation does not isolate Temporal task queues; reject duplicate identities before starting workflows. For the initial schema, the task queue is derived as `<service-name>.v1.temporal`, and the child workflow type is fixed as `ExampleChildWorkflow`. These are application contracts, not features inferred from Temporal.
 
 Dependencies are parsed by splitting on commas and trimming whitespace. Missing or wholly empty values mean no dependencies. Duplicate names are deduplicated; empty entries in a nonempty list are rejected to catch malformed declarations. References to unknown workers, self-dependencies, and cycles invalidate the graph.
 
@@ -82,7 +86,7 @@ Kubernetes allows at most 256 KiB for the aggregate size of annotation keys and 
 
 Validation has three complementary layers:
 
-1. **Kyverno admission:** enforce annotation syntax and reject self-dependencies on source Service CREATE and UPDATE requests, before the resource is persisted. Split and trim dependency entries before comparing them with `metadata.name`. Apply enforcement to registered worker Services in the application namespace and return actionable rejection messages. Permit absent/empty dependency annotations for roots and permit disabling/removing registration so cleanup can proceed.
+1. **Kyverno admission:** enforce annotation syntax and reject self-dependencies on source Service CREATE and UPDATE requests, before the resource is persisted. Split and trim dependency entries before comparing them with `metadata.name`. Apply enforcement to registered worker Services in labeled worker namespaces and return actionable rejection messages. Permit absent/empty dependency annotations for roots and permit disabling/removing registration so cleanup can proceed.
 2. **CI/pre-deployment:** validate the complete intended worker graph from rendered application manifests using the same parsing and graph-validation contract as the orchestrator. Reject unknown dependencies, self-dependencies, and cycles of arbitrary length. Validate a complete deployment set, not an isolated manifest fragment.
 3. **Orchestrator:** validate the observed registry after changes and validate the immutable snapshot selected for each request before starting any Temporal workflow. Reject new runs when the graph is invalid; do not defer detection until workflow execution. Keep these checks even when admission and CI validation pass.
 
@@ -106,10 +110,11 @@ data:
   workflowType: "ExampleChildWorkflow"
   runAfter: "worker-a,worker-b"
   sourceServiceName: "worker-c"
+  sourceServiceNamespace: "temporal-demo-worker-c"
   sourceServiceUID: "<source Kubernetes Service UID>"
 ```
 
-The ConfigMap is derived state, not intended for manual editing. Kyverno must have the narrowly scoped permissions required to generate and synchronize it. The orchestrator only needs read access to registration ConfigMaps in the application namespace; granting access to Services for stale-source validation is a fallback, not a default.
+The ConfigMap is derived state, not intended for manual editing. Kyverno must have the narrowly scoped permissions required to generate and synchronize it in each worker namespace. The orchestrator service account lives in its own namespace: a read-only ClusterRole permits Namespace get/list/watch, while Roles and RoleBindings in each worker namespace permit ConfigMap get/list/watch for that service account. Do not grant cluster-wide ConfigMap reads or access to Secrets/writes. Namespace labels select discovery scope, not authorization; deployment automation must create the corresponding RoleBinding for every added worker namespace. Granting access to Services for stale-source validation is a fallback, not a default.
 
 ### Lifecycle requirements
 
@@ -123,7 +128,7 @@ Verify these behaviors against the pinned Kyverno release. Synchronization, sour
 
 ### Orchestrator registry
 
-Use a Kubernetes list/watch mechanism, including initial synchronization, reconnect/relist handling, and deletion events. Publish immutable, validated registry snapshots to request handlers. Sort worker identities and dependency lists so the plan is reproducible.
+Watch labeled Namespaces and maintain a separate registration ConfigMap list/watch per selected namespace, including initial synchronization, reconnect/relist handling, and deletion events. Namespace additions start a watcher; deletion or label removal stops it and removes its registrations. Publish the combined registry as synchronized only after all selected namespace caches synchronize. Permission failures must invalidate synchronization rather than silently omit a worker namespace. Publish immutable, validated registry snapshots to request handlers. Sort worker identities and dependency lists so the plan is reproducible.
 
 Each snapshot includes a content hash. Invalid registry state rejects new runs rather than silently using a partial graph. Existing runs retain their original plan. Expose registry contents, hash, and validation errors through `GET /workers` for debugging. An empty registry is not a runnable plan.
 
@@ -218,9 +223,9 @@ go.mod
 go.sum
 ```
 
-Use mise tasks to create/delete the cluster, install infrastructure, build/load images, deploy applications, port-forward, run tests, and run the smoke scenario. Installation must wait for CRDs, controllers, admission webhooks, and Temporal namespace readiness before applying dependent resources.
+Use mise tasks to create/delete the cluster, install infrastructure, build/load images, deploy applications, port-forward, run tests, and run the smoke scenario. Installation must wait for CRDs, controllers, admission webhooks, PostgreSQL readiness, default/visibility schema setup, and Temporal namespace readiness before applying dependent resources. Schema jobs must be repeatable, version-pinned, and complete before starting Temporal. Keep database credentials in local Secrets/environment files, not committed manifests.
 
-Document both a quick-start path and teardown. Clarify which teardown operations delete workflow history. Keep secrets and local state out of Git. Restrict local endpoints to localhost; production authentication is not part of this demo.
+Document both a quick-start path and teardown. PostgreSQL volume/PVC storage preserves history across Temporal and database Pod/container replacement. Compose down preserves named volumes; explicit reset deletes them. Deleting the kind cluster deletes its local PVC data; this is not host-external backup. Verify persistence and document destructive operations. Keep secrets and local state out of Git. Restrict local endpoints to localhost; production authentication is not part of this demo.
 
 ## 9. Demonstration and acceptance criteria
 
@@ -240,6 +245,8 @@ A successful demonstration proves:
 10. Registration removal and Service deletion leave no usable stale registration after reconciliation.
 11. Kyverno rejects malformed dependency lists and self-references on both Service creation and update, including whitespace-padded self-references, while allowing valid roots and multi-dependency lists.
 12. CI/pre-deployment validation rejects unknown dependencies and cycles of arbitrary length in the intended graph; orchestrator validation also catches such invalid graphs introduced outside that path.
+13. Each worker and the orchestrator run in separate namespaces. Namespace add/remove and RoleBinding changes are reflected in discovery without an orchestrator restart; unauthorized reads/writes are denied.
+14. Completed workflow history survives Temporal and PostgreSQL container/Pod replacement; explicit volume/PVC/cluster reset has the documented destructive behavior.
 
 The timing budget for the smoke test must account for controller reconciliation, scaler polling, scheduling, image startup, and cooldown. Assert ordering from workflow events or recorded results, not simply log arrival times.
 
@@ -256,7 +263,7 @@ The timing budget for the smoke test must account for controller reconciliation,
 - Kind smoke test for zero-to-one activation, dependency order, successful completion, and return to zero.
 - Resilience experiments: stop a worker during an activity, exercise delayed retries, restart the orchestrator during a run, and make Temporal temporarily unavailable.
 
-Keep lightweight checks on every pull request. The heavier kind test can begin as a manually triggered CI workflow, then become required once stable. Clearly separate expected recovery through retries from a claim that scale-down never interrupts work.
+Add CI in the first implementation task: formatting, Go tests/race detection, and vet, using the same commands developers run locally. Extend it in each PR as functionality appears: workflow/API tests, Compose builds/smoke, graph validation, chart/schema validation, kind baseline, scaling, policies, discovery, and full smoke. Each task has its own PR with local verification evidence and explicit completion criteria; previously introduced CI checks remain enabled. Core bounded kind checks run on PRs once introduced; longer resilience experiments can be manual, but remain locally runnable. Clearly separate expected recovery through retries from a claim that scale-down never interrupts work.
 
 ## 11. Risks and mitigations
 
@@ -267,27 +274,27 @@ Keep lightweight checks on every pull request. The heavier kind test can begin a
 - **Unavailable worker:** validate deployment/queue naming, inspect scaler errors, and bound execution timeouts. Discovery proves registration, not executable capacity.
 - **Removal during execution:** prohibit it initially; future work can explore draining and worker deployment versions. A plan snapshot does not keep a Deployment alive.
 - **Version or architecture incompatibility:** pin a tested matrix and verify ARM64 images where required.
-- **Laptop resource pressure:** use a minimal single-node setup and development Temporal server. Roughly 4–6 available CPU cores and 8–12 GB container-runtime memory is a starting estimate to measure, not a requirement guarantee.
-- **Registry abuse:** restrict registration to the application namespace, validate annotations, and use least-privilege service accounts. Ability to create or modify registration sources is a trusted capability.
+- **Laptop resource pressure:** use a minimal single-node setup and single-instance PostgreSQL-backed Temporal. Roughly 4–6 available CPU cores and 8–12 GB container-runtime memory is a starting estimate to measure, not a requirement guarantee.
+- **Registry abuse:** restrict discovery to labeled worker namespaces, validate annotations, and use least-privilege cross-namespace RoleBindings. Restrict who can label Namespaces; the label is a trust declaration, not an RBAC boundary. Ability to create or modify registration sources is a trusted capability.
 
 ## 12. Development sequence
 
-1. Implement Temporal parent/child/activity behavior with a static graph in Compose.
+1. Establish shared contracts and local test commands with CI in the first PR; implement Temporal parent/child/activity behavior with a static graph in PostgreSQL-backed Compose.
 2. Add dependency validation, concurrent scheduling, API status, and plan snapshots.
 3. Deploy to kind with workers fixed at one replica.
 4. Prove KEDA activation and scale-down for a single worker; investigate long-running activity interruption before expanding.
 5. Add Kyverno admission validation and generated registrations; test rejection behavior and the entire registration lifecycle. Wire complete-manifest graph validation into CI/pre-deployment tasks.
 6. Run the diamond scenario, resilience experiments, CI checks, and document observations.
 
-Each stage should have an independently runnable verification command. Do not debug discovery and scaling for the first time simultaneously.
+Every task must state its definition of done, locally runnable verification commands and expected outcomes, and an implementation PR. Branch each task from updated main after its prerequisite PRs merge; include local results and cumulative CI results before requesting review. Never auto-merge without approval. Each stage should have an independently runnable verification command. Do not debug discovery and scaling for the first time simultaneously.
 
 ## 13. Decisions to verify before implementation
 
 No additional product requirements are needed to prepare an implementation plan if the proposed defaults are approved. The implementation plan must settle and record:
 
-- Exact Go, Temporal server/SDK, kind/Kubernetes, KEDA, Kyverno, and chart versions.
+- Exact Go, Temporal server/SDK/schema tooling, PostgreSQL, kind/Kubernetes, KEDA, Kyverno, and chart versions.
 - Kyverno support for the specified registration lifecycle and any necessary cleanup mechanism.
-- Development-server persistence configuration and reset behavior.
+- PostgreSQL/Temporal persistence compatibility, schema setup/migration versions, PVC configuration, and reset behavior.
 - Initial timeout, retry, shutdown, polling, and cooldown values.
 - Precise HTTP request/response schemas and idempotency-conflict handling.
 
