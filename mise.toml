@@ -1,0 +1,24 @@
+min_version = "2026.10.17"
+
+[tools]
+go = "1.27.3"
+
+[env]
+GOTOOLCHAIN = "local"
+
+[tasks.test]
+description = "Run all Go tests with the race detector"
+run = "go test -race ./..."
+
+[tasks.validate]
+description = "Check formatting, all tests/race, and vet (same command in CI)"
+run = '''
+set -eu
+files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
+if [ -n "$files" ]; then
+  printf 'Go files need gofmt:\n%s\n' "$files"
+  exit 1
+fi
+go test -race ./...
+go vet ./...
+'''

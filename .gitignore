@@ -1,0 +1,25 @@
+# Project-local tools, state, builds and rendered deployment output
+.tools/
+.local/
+.state/
+/bin/
+/dist/
+/rendered/
+/tmp/
+*.test
+*.out
+coverage/
+coverage.*
+
+# Credentials and local overrides
+.env
+.env.*
+!.env.example
+mise.local.toml
+kubeconfig*
+*.kubeconfig
+*.key
+*.pem
+credentials*
+secrets.local.*
+.DS_Store
