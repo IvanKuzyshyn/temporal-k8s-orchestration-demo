@@ -30,6 +30,16 @@ Task 2 release metadata checked on 2026-10-25 (UTC host clock), before dependenc
 - Host verification uses the SDK's in-process test suite, not a Temporal server. Real-server cancellation delivery, parent execution timeout/retry start options, exact SDK/server compatibility, and infrastructure runtime gates remain separate consuming-task obligations. No Linux run is claimed here.
 - Upstream release: <https://github.com/temporalio/sdk-go/releases/tag/v1.50.0>; [tagged go.mod](https://github.com/temporalio/sdk-go/blob/v1.50.0/go.mod).
 
+## Consumed HTTP router selection and host evidence
+
+Task 3 checked release metadata on **2026-10-25 UTC** before installation:
+
+- `curl -fsSL https://proxy.golang.org/github.com/go-chi/chi/v5/@latest` returned **v5.5.0**, timestamp `2026-10-14T13:20:04Z`, tag commit `3a33ba578e0dd93444e0ff386cc26e665d92e31e`.
+- `curl -fsSL https://proxy.golang.org/github.com/go-chi/chi/v5/@v/v5.5.0.mod` and `curl -fsSL https://raw.githubusercontent.com/go-chi/chi/v5.5.0/go.mod` both returned module `github.com/go-chi/chi/v5`, requiring **Go 1.24**. `mise exec -- go version` returned **go1.27.3 darwin/arm64**, satisfying that requirement. Release/tag: <https://github.com/go-chi/chi/releases/tag/v5.5.0>; [tagged module](https://github.com/go-chi/chi/blob/v5.5.0/go.mod).
+- `mise exec -- go get github.com/go-chi/chi/v5@v5.5.0` and `mise exec -- go mod tidy` succeeded; `go.mod` and `go.sum` pin that released dependency. Temporal SDK **v1.50.0** and scoped Gomega **v1.38.2** remain unchanged.
+- Host HTTP/service/SDK-adapter tests and orchestrator race tests pass without a live Temporal server. The adapter tests assert actual outgoing SDK options, including parent queue/type, 30-minute execution timeout, nil retry policy, reject-duplicate ID reuse, conflict-fail policy, immutable input, and distinct request/plan Memo hashes. Durable lookup/Memo decoding, completed-run retrieval, unfinished nonblocking retrieval and error mapping are exercised through narrow SDK-client fakes, not a giant `client.Client` fake.
+- Exact RED/GREEN, focused/race and full uncached `mise run validate` evidence is recorded in `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-3-report.md`. Existing cumulative CI discovers the new packages automatically; **Linux CI acceptance remains pending controller observation**. No live server, cluster, persistence experiment or infrastructure gate is claimed by these unit tests.
+
 ## Future consuming-task selections (not installed or runtime-verified)
 
 - Temporal server **1.32.0**, schema/admin tooling **1.32.0** from the same release, chart **1.7.0** (its appVersion is 1.32.0). Release: <https://github.com/temporalio/temporal/releases/tag/v1.32.0>; published chart index: <https://go.temporal.io/helm-charts/index.yaml>. Schema source: <https://github.com/temporalio/temporal/tree/v1.32.0/schema/postgresql/v12>. Use `postgres12` for default and visibility stores, separate databases `temporal` and `temporal_visibility`; schema setup/migration must precede server startup. Pin image digests and verify schema-tool packaging in the consuming infrastructure task.

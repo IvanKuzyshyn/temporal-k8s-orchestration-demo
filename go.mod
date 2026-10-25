@@ -3,6 +3,7 @@ module github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo
 go 1.27.0
 
 require (
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/onsi/gomega v1.38.2
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.50.0
