@@ -4,22 +4,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"testing"
 
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/plan"
+	"github.com/onsi/gomega"
 )
 
 func TestSnapshotDeepCopy(t *testing.T) {
+	g := gomega.NewWithT(t)
 	p, err := LoadStatic("../../deploy/config/workers.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	initial := p.Snapshot()
-	if !initial.Synced || len(initial.Problems) != 0 || len(initial.Plan.Nodes) != 4 {
-		t.Fatalf("snapshot: %+v", initial)
-	}
+	g.Expect(initial.Synced).To(gomega.BeTrue())
+	g.Expect(initial.Problems).To(gomega.HaveLen(0))
+	g.Expect(initial.Plan.Nodes).To(gomega.HaveLen(4))
 	s := p.Snapshot()
 	s.Plan.Nodes[0].Name = "corrupted"
 	s.Plan.Nodes[3].Dependencies[0] = "corrupted"
@@ -27,46 +26,35 @@ func TestSnapshotDeepCopy(t *testing.T) {
 	s.Problems = append(s.Problems, "corrupted")
 	s.Synced = false
 	s.Plan.Hash = "corrupted"
-	if !reflect.DeepEqual(initial, p.Snapshot()) {
-		t.Fatal("caller mutated stored snapshot")
-	}
+	g.Expect(p.Snapshot()).To(gomega.Equal(initial), "caller mutated stored snapshot")
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() { s := p.Snapshot(); s.Plan.Nodes[3].Dependencies[0] = "changed" })
 	}
 	wg.Wait()
-	if !reflect.DeepEqual(initial, p.Snapshot()) {
-		t.Fatal("concurrent caller mutated stored snapshot")
-	}
+	g.Expect(p.Snapshot()).To(gomega.Equal(initial), "concurrent caller mutated stored snapshot")
 }
 
 // Strict decoding prevents typos and appended JSON from silently changing the registry.
 func TestLoadStatic(t *testing.T) {
-	if _, err := LoadStatic(filepath.Join(t.TempDir(), "missing")); err == nil {
-		t.Fatal("missing file accepted")
-	}
+	g := gomega.NewWithT(t)
+	_, err := LoadStatic(filepath.Join(t.TempDir(), "missing"))
+	g.Expect(err).To(gomega.HaveOccurred(), "missing file accepted")
 	for _, raw := range []string{"{", "[]", "null", "{}", "[] {}", `[{"unknown":true}]`, `[{"schemaVersion":"2"}]`} {
 		t.Run(raw, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			path := filepath.Join(t.TempDir(), "workers.json")
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := LoadStatic(path); err == nil {
-				t.Fatalf("accepted %s", raw)
-			}
+			g.Expect(os.WriteFile(path, []byte(raw), 0600)).To(gomega.Succeed())
+			_, err := LoadStatic(path)
+			g.Expect(err).To(gomega.HaveOccurred(), "accepted %s", raw)
 		})
 	}
 	data, err := os.ReadFile("../../deploy/config/workers.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	var regs []plan.Registration
-	if err = json.Unmarshal(data, &regs); err != nil {
-		t.Fatal(err)
-	}
-	if len(regs) != 4 {
-		t.Fatalf("fixture size %d", len(regs))
-	}
+	err = json.Unmarshal(data, &regs)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(regs).To(gomega.HaveLen(4))
 	for _, mutate := range []func(){
 		func() { regs[1].SourceServiceNamespace = regs[0].SourceServiceNamespace },
 		func() {
@@ -78,15 +66,10 @@ func TestLoadStatic(t *testing.T) {
 	} {
 		mutate()
 		b, err := json.Marshal(regs)
-		if err != nil {
-			t.Fatal(err)
-		}
+		g.Expect(err).NotTo(gomega.HaveOccurred())
 		path := filepath.Join(t.TempDir(), "bad.json")
-		if err = os.WriteFile(path, b, 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = LoadStatic(path); err == nil {
-			t.Fatal("accepted ambiguous registry")
-		}
+		g.Expect(os.WriteFile(path, b, 0600)).To(gomega.Succeed())
+		_, err = LoadStatic(path)
+		g.Expect(err).To(gomega.HaveOccurred(), "accepted ambiguous registry")
 	}
 }

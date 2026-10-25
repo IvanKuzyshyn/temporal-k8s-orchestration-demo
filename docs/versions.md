@@ -6,7 +6,7 @@ Research observed on 2026-10-22 (UTC host clock); the 2026-10-17 design/plan dat
 
 - Go **1.27.3**, from the stable release feed <https://go.dev/dl/?mode=json>. Exact pin in `mise.toml`; module language level 1.27.0. Host: **Darwin arm64**. Race testing requires a working C toolchain.
 - mise **2026.10.17**, <https://github.com/jdx/mise/releases/tag/v2026.10.17>. Project-local bootstrap binary checked against upstream SHASUMS256.txt; no global install or user configuration changes. CI pins the same version and the config requires it as a minimum.
-- Task 1 is standard-library-only. `go mod tidy` legitimately produces **no go.sum**; do not add a dependency or an empty checksum file to simulate one.
+- The original Task 1 foundation was standard-library-only, so its initial `go mod tidy` legitimately produced no `go.sum`. The follow-up test-only migration now pins **Gomega v1.38.2** in `go.mod` and records its dependency checksums in `go.sum`; runtime product code remains standard-library-only. Release: <https://github.com/onsi/gomega/releases/tag/v1.38.2>; [tagged go.mod](https://github.com/onsi/gomega/blob/v1.38.2/go.mod) requires Go **1.23.0**, satisfied by pinned Go 1.27.3. The Go module proxy release metadata identifies tag commit `79b8a75a10e36ee598344c040317f5ab1c907f53` (2025-08-26). Tests retain standard `testing.T` with per-test/subtest `gomega.NewWithT(t)`; no Ginkgo runner or project requirement is added. Tidy includes Ginkgo checksums because Gomega's own tests depend on it. Local baseline/focused/uncached validation evidence is recorded in `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/gomega-report.md`; this does not close any Linux CI or infrastructure gate below.
 
 ## Approved staged gate and evidence map
 

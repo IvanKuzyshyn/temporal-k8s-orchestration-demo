@@ -3,9 +3,10 @@ package plan
 import (
 	"encoding/hex"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/onsi/gomega"
 )
 
 // These cases catch accepting malformed lists or losing canonical order/deduplication.
@@ -21,12 +22,13 @@ func TestParseDependencies(t *testing.T) {
 		{"worker-a, \t ,worker-b", nil, true}, {"Worker-A", nil, true}, {"worker_a", nil, true},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			got, err := ParseDependencies(tc.raw)
-			if (err != nil) != tc.bad {
-				t.Fatalf("error = %v", err)
-			}
-			if !tc.bad && !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %#v, want %#v", got, tc.want)
+			if tc.bad {
+				g.Expect(err).To(gomega.HaveOccurred())
+			} else {
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+				g.Expect(got).To(gomega.Equal(tc.want))
 			}
 		})
 	}
@@ -42,6 +44,7 @@ func diamond() []Registration {
 
 // A missing validation branch must allow at least one of these malformed graphs.
 func TestBuild(t *testing.T) {
+	g := gomega.NewWithT(t)
 	cases := []struct {
 		name    string
 		mutate  func([]Registration) []Registration
@@ -72,57 +75,49 @@ func TestBuild(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			p, err := Build(tc.mutate(diamond()))
-			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.problem) {
-				t.Fatalf("plan=%+v error=%v; want %q", p, err, tc.problem)
-			}
-			if !reflect.DeepEqual(p, Plan{}) {
-				t.Fatal("invalid graph exposed partial plan")
-			}
+			g.Expect(err).To(gomega.HaveOccurred())
+			g.Expect(strings.ToLower(err.Error())).To(gomega.ContainSubstring(tc.problem))
+			g.Expect(p).To(gomega.Equal(Plan{}), "invalid graph exposed partial plan")
 		})
 	}
 	for _, name := range []string{"", "Worker-a", "worker_a", "worker.a", "-worker", "worker-", "1worker", strings.Repeat("a", 64)} {
 		t.Run("invalid service "+name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			r := diamond()
 			r[0].WorkerName = name
 			r[0].SourceServiceName = name
 			r[0].TaskQueue = name + ".v1.temporal"
-			if _, err := Build(r); err == nil {
-				t.Fatalf("accepted %q", name)
-			}
+			_, err := Build(r)
+			g.Expect(err).To(gomega.HaveOccurred(), "accepted %q", name)
 		})
 	}
 	r := diamond()
 	p, err := Build(r)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	want := []Node{
 		{Name: "worker-a", TaskQueue: "worker-a.v1.temporal", WorkflowType: "ExampleChildWorkflow"},
 		{Name: "worker-b", TaskQueue: "worker-b.v1.temporal", WorkflowType: "ExampleChildWorkflow", Dependencies: []string{"worker-a"}},
 		{Name: "worker-c", TaskQueue: "worker-c.v1.temporal", WorkflowType: "ExampleChildWorkflow", Dependencies: []string{"worker-a"}},
 		{Name: "worker-d", TaskQueue: "worker-d.v1.temporal", WorkflowType: "ExampleChildWorkflow", Dependencies: []string{"worker-b", "worker-c"}},
 	}
-	if p.SchemaVersion != "1" || !reflect.DeepEqual(p.Nodes, want) {
-		t.Fatalf("unexpected plan: %+v", p)
-	}
-	if b, e := hex.DecodeString(p.Hash); e != nil || len(b) != 32 {
-		t.Fatalf("not SHA-256: %q", p.Hash)
-	}
+	g.Expect(p.SchemaVersion).To(gomega.Equal("1"))
+	g.Expect(p.Nodes).To(gomega.Equal(want))
+	b, err := hex.DecodeString(p.Hash)
+	g.Expect(err).NotTo(gomega.HaveOccurred(), "not SHA-256: %q", p.Hash)
+	g.Expect(b).To(gomega.HaveLen(32))
 	// Empty source UID is valid for static registrations; max length names remain valid.
 	name := strings.Repeat("a", 63)
 	_, err = Build([]Registration{{SchemaVersion: "1", WorkerName: name, TaskQueue: name + ".v1.temporal", WorkflowType: "ExampleChildWorkflow", SourceServiceName: name, SourceServiceNamespace: strings.Repeat("n", 63)}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 }
 
 // Hashes must describe execution, not discovery order or provenance.
 func TestHashCanonical(t *testing.T) {
+	g := gomega.NewWithT(t)
 	base, err := Build(diamond())
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	cases := []struct {
 		name   string
 		change func([]Registration)
@@ -141,54 +136,38 @@ func TestHashCanonical(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			r := diamond()
 			tc.change(r)
 			p, err := Build(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if (p.Hash == base.Hash) != tc.same {
-				t.Fatalf("hash equality = %v, want %v", p.Hash == base.Hash, tc.same)
-			}
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(p.Hash == base.Hash).To(gomega.Equal(tc.same))
 		})
 	}
 	r := diamond()
 	before := append([]Registration(nil), r...)
 	p, err := Build(r)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	p.Nodes[1].Dependencies[0] = "changed"
-	if !reflect.DeepEqual(r, before) {
-		t.Fatal("Build mutated registrations")
-	}
+	g.Expect(r).To(gomega.Equal(before), "Build mutated registrations")
 }
 
 func TestPlanJSON(t *testing.T) {
+	g := gomega.NewWithT(t)
 	p, err := Build(diamond())
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	var fields map[string]json.RawMessage
-	if err = json.Unmarshal(b, &fields); err != nil {
-		t.Fatal(err)
-	}
+	err = json.Unmarshal(b, &fields)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	for _, key := range []string{"schemaVersion", "nodes", "hash"} {
-		if _, ok := fields[key]; !ok {
-			t.Fatalf("missing %s in %s", key, b)
-		}
+		g.Expect(fields).To(gomega.HaveKey(key))
 	}
 	var nodes []map[string]json.RawMessage
-	if err = json.Unmarshal(fields["nodes"], &nodes); err != nil {
-		t.Fatal(err)
-	}
+	err = json.Unmarshal(fields["nodes"], &nodes)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
 	for _, key := range []string{"name", "taskQueue", "workflowType", "dependencies"} {
-		if _, ok := nodes[0][key]; !ok {
-			t.Fatalf("missing %s", key)
-		}
+		g.Expect(nodes[0]).To(gomega.HaveKey(key))
 	}
 }
