@@ -52,7 +52,7 @@ func (a *Activities) Example(ctx context.Context, input contracts.ChildInput) (c
 			if err := ctx.Err(); err != nil {
 				return contracts.ChildResult{}, err
 			}
-			return contracts.ChildResult{WorkerName: a.workerName, Message: input.Payload.Message}, nil
+			return contracts.ChildResult{WorkerName: a.workerName}, nil
 		}
 	}
 }

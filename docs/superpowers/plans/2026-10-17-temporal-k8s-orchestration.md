@@ -36,7 +36,7 @@ Task 4 adds Compose CI, Task 6 adds PR-triggered kind baseline CI, and Tasks 7�
 ## Review Focus
 
 - Whitespace, duplicate dependencies, and trailing commas must mean the same thing in Go and Kyverno; tested in Tasks 1 and 8.
-- Concurrent duplicate HTTP requests and retries after completion must not create extra runs; conflicting payloads must not silently succeed; tested in Task 3.
+- Concurrent body-free HTTP requests and same-key retries after completion/restart must return the original durable run/plan/result without rebinding on registry changes; tested in Task 3.
 - Watch reconnects, ConfigMap deletion, invalid partial graphs, and mutation of returned slices must not expose a stale-valid or mutable snapshot; tested in Task 9.
 - A fast branch must not wait for unrelated slow branches; failure must not launch downstream work, and cancellation must reach siblings; tested in Task 2.
 - Zero backlog during an activity, delayed retry, and a worker killed mid-task must not be misreported as successful uninterrupted execution; tested in Tasks 7 and 10.
@@ -52,7 +52,7 @@ Concrete implementation choices:
 - Keep simple comma-separated dependency names globally unique across the demo. Reject duplicate Service identities across namespaces; do not guess which worker was intended. Generated ConfigMaps stay in their source worker namespace and include `sourceServiceNamespace`.
 - Infrastructure namespaces `temporal`, `keda`, and `kyverno`.
 - API port 8080; worker health port 8081; host API forwarding bound to `127.0.0.1`.
-- Example payload: `{"message":"hello"}`. All four workers return their identity and the unchanged message. A parent result is sorted by worker identity, independent of completion order.
+- No request/business data: POST has a zero-byte body; parent input contains only Plan, child/activity inputs only WorkerName, and child results only WorkerName. A parent result is sorted by worker identity, independent of completion order.
 - Graph: A → B/C → D, using Service names `worker-a` through `worker-d`.
 - Default activity duration 5 seconds; heartbeat interval 2 seconds; heartbeat timeout 15 seconds; activity start-to-close timeout 60 seconds; schedule-to-close timeout 10 minutes; maximum attempts 3, initial retry interval 2 seconds, maximum interval 10 seconds, coefficient 2.
 - Parent execution timeout 30 minutes, child execution timeout 15 minutes, no parent/child workflow retry policy. These leave room for cold starts; configure shorter test-only values.
@@ -107,10 +107,9 @@ Shared contracts to define in Task 1:
  type Provider interface { Snapshot() Snapshot }
 
 // package contracts
- type Payload struct { Message string `json:"message"` }
- type ParentInput struct { Plan plan.Plan; Payload Payload; RequestHash string }
- type ChildInput struct { WorkerName string; Payload Payload }
- type ChildResult struct { WorkerName string; Message string }
+ type ParentInput struct { Plan plan.Plan }
+ type ChildInput struct { WorkerName string }
+ type ChildResult struct { WorkerName string }
  type ParentResult struct { Results []ChildResult }
 ```
 
@@ -164,17 +163,17 @@ Use explicit lower-camel JSON tags on all serialized fields. `Build` validates s
 
 **Files:** Create `services/orchestrator/runs/{service,temporal}.go`, `services/orchestrator/api/{router,handlers}.go`, corresponding `_test.go` files, and `docs/api.md`.
 
-**Interfaces:** Produces `runs.Service` with `Start(ctx context.Context, key string, payload contracts.Payload) (Run, error)` and `Get(ctx context.Context, workflowID string) (Run, error)`; `Run` contains workflow ID, run ID, plan hash, status, optional `ParentResult`, and failure summary. Constructor consumes `registry.Provider` and a narrow mockable Temporal gateway. `api.New(provider registry.Provider, service *runs.Service, ready func(context.Context) error) http.Handler` returns chi routing.
+**Interfaces:** Produces `runs.Service` with `Start(ctx context.Context, key string) (Run, error)` and `Get(ctx context.Context, workflowID string) (Run, error)`; `Run` contains workflow ID, run ID, plan hash, status, optional `ParentResult`, and failure summary. Constructor consumes `registry.Provider` and a narrow mockable Temporal gateway. `api.New(provider registry.Provider, service *runs.Service, ready func(context.Context) error) http.Handler` returns chi routing.
 
 HTTP contract:
-- `POST /runs` accepts exactly `{"message":"..."}`, optional `Idempotency-Key` header, and at most 16 KiB; reject unknown fields, trailing JSON, oversized bodies, and malformed/overlong keys. Keys are 1–128 printable ASCII characters.
+- `POST /runs` expects no body (zero bytes) and an optional `Idempotency-Key` header. Reject any unexpected body byte with safe 400 using a tiny bounded probe, including unknown-length/chunked streams; no JSON request DTO, parser, validator, content-type requirement, or size-based 413. Keys are 1–128 printable ASCII characters; reject malformed/overlong keys.
 - Without a key, generate a unique workflow ID. With a key, ID is `run-` plus SHA-256 of the key. Never include raw key material in logs.
-- Hash canonical payload independently of registry version. Store request hash and plan hash in Temporal Memo at workflow creation. Use reject-duplicate workflow ID reuse and conflict-fail semantics supported by the pinned SDK.
-- On already-exists, describe the original run, compare request hashes, and return its original identifiers/hash for equal payload; return 409 for conflicting payload. Do not rebind a retry to a changed registry plan. This works after completion and orchestrator restarts, within Temporal history retention. Document that deduplication expires with history; no separate application idempotency database is introduced beyond Temporal's PostgreSQL persistence.
-- 202 accepted/repeated same request; 400 malformed request; 413 oversized body; 409 conflicting key; 503 invalid/unsynchronized registry or unavailable Temporal; GET unknown ID → 404; unexpected internal errors → 500 without sensitive details.
+- Store only planHash in Temporal Memo at workflow creation; no request hashing or input-conflict comparison. Validate retained metadata on reads and ignore unrelated extra Memo. Use reject-duplicate workflow ID reuse and conflict-fail semantics supported by the pinned SDK.
+- Look up keyed runs before validating the current registry. On already-exists, describe the original run and return its original identifiers/hash/status/result, never rebind a key or conflict on registry changes. This works after completion and orchestrator restarts, including invalid/unsynchronized current registries, within Temporal history retention. New keys use current validated immutable plans. Document that deduplication expires with history; no separate application idempotency database is introduced beyond Temporal's PostgreSQL persistence.
+- 202 accepted/repeated same key; 400 unexpected body bytes/read error or malformed key; 503 invalid/unsynchronized registry for new starts or unavailable Temporal; GET unknown ID → 404; unexpected internal errors → 500 without sensitive details.
 - `GET /workers` returns synchronization state, canonical plan/hash, and diagnostics even when invalid. `GET /healthz` is process liveness; `/readyz` checks initialized registry and Temporal connectivity with a bounded timeout, but not graph validity, so diagnostics remain reachable when a graph is invalid.
 
-- [ ] Write handler/gateway tests for these statuses, malformed input, concurrent duplicate submissions, duplicate after completion, payload conflict, registry change on retry, Temporal timeout after an ambiguous start, invalid snapshot, and no Temporal start call on graph rejection.
+- [ ] Write handler/gateway tests for these statuses, malformed input, concurrent duplicate submissions, duplicate after completion/restart, key-only replay/start races, registry change on retry, Temporal timeout after an ambiguous start, invalid snapshot, and no Temporal start call on graph rejection.
 - [ ] Run `go test ./services/orchestrator/api ./services/orchestrator/runs`; expect missing implementations.
 - [ ] Implement API and Temporal gateway; keep describe/result retrieval nonblocking for unfinished runs. Revalidate the copied plan before the first start and attach its immutable input. Resolve duplicate keys from Temporal rather than an in-memory map; if existing-run lookup is unavailable, return 503 rather than inventing success.
 - [ ] Run `go test -race ./services/orchestrator/...`; require success. Document retention-bound deduplication and the exact example requests/responses in `docs/api.md`.
@@ -194,7 +193,7 @@ HTTP contract:
 
 **Interfaces:** Environment keys: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `REGISTRY_MODE=static|kubernetes`, `REGISTRY_FILE`, `WORKER_NAMESPACE_SELECTOR`, `WORKER_NAME`, `TASK_QUEUE`, `ACTIVITY_DURATION`, and `HTTP_ADDR`. Produces `mise run compose:up`, `compose:smoke`, `compose:down`, and explicit destructive `compose:reset`.
 
-- [ ] Write configuration tests rejecting missing identity, mismatched queue, unknown registry mode, and malformed durations. Write a Compose smoke script that waits for readiness, submits a run, polls completion, and asserts four named results. Run tests/script before process wiring; expect failure.
+- [ ] Write configuration tests rejecting missing identity, mismatched queue, unknown registry mode, and malformed durations. Write a Compose smoke script that waits for readiness, submits a body-free POST, polls completion, and asserts four sorted worker-identity-only results with no business fields. Include same-key replay after completion/restart and rejection of unexpected body bytes. Run tests/script before process wiring; expect failure.
 - [ ] Wire Temporal registration, static registry, chi servers, structured logs, startup retries, and SIGTERM shutdown. Mark workers ready only after polling starts; separate liveness from Temporal availability. Log run/workflow/activity/queue identifiers through SDK-aware logging.
 - [ ] Build non-root application images and Compose services for PostgreSQL, schema setup, self-hosted Temporal, Temporal UI, orchestrator, and four workers. Bind host ports to localhost. Use pinned server/admin-tools images with a compatible PostgreSQL SQL plugin; initialize both persistence databases with matching schemas. Wait for PostgreSQL health and schema completion before starting Temporal, then create/check Temporal namespace `default` before starting application workers. Keep credentials in ignored local environment files, with a nonsecret example template.
 - [ ] Add `mise run compose:persistence`: complete a run, restart Temporal and PostgreSQL without removing the named volume, and assert the same workflow/run ID and result remain queryable. Prove schema setup is safe to rerun and reset removes old history.
@@ -321,7 +320,7 @@ HTTP contract:
 
 **Interfaces:** Produces `mise run smoke` and `mise run test:resilience`. Integration tests read `DEMO_API_URL`, `TEMPORAL_ADDRESS`, and explicit Kubernetes context. Collect workflow histories, Pod events/logs, ScaledObject conditions, and registry snapshots on failure, excluding secrets.
 
-- [ ] Write `TestDiamondFromZero` that waits for exactly four expected registrations and the canonical expected hash, verifies all child workers are zero, starts a run, and checks parent history: B/C starts follow A completion; D starts follow both B/C completions; each child runs once with the expected queue. Verify result retrieval and eventual zero replicas with a 10-minute overall smoke deadline.
+- [ ] Write `TestDiamondFromZero` that waits for exactly four expected registrations and the canonical expected hash, verifies all child workers are zero, starts a run with a body-free POST, and checks parent history: B/C starts follow A completion; D starts follow both B/C completions; each child runs once with the expected queue. Verify sorted worker-identity-only results, no business data in parent/child/activity commands, same-key durable replay after completion/restart/registry changes, safe 400 for unexpected body bytes, and eventual zero replicas with a 10-minute overall smoke deadline.
 - [ ] Write `TestPlanSnapshotIsolation`: update dependencies while one run is active, show that its input/hash and execution remain unchanged, then assert a new run uses the new plan.
 - [ ] Write recovery tests: terminate worker during activity, restart orchestrator during execution, exercise retry after worker scale-down, and temporarily interrupt Temporal connectivity without deleting its pod/storage. Assert retry attempts are observable, API errors are truthful, and recovery completes within configured execution bounds. Restore baseline resources after each experiment.
 - [ ] Run tests before any remaining glue changes; fix missing wiring without weakening ordering or lifecycle assertions. Use Temporal histories/results, not log timing, for ordering assertions.

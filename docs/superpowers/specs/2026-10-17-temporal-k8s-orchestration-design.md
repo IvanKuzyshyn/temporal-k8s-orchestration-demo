@@ -138,16 +138,16 @@ Discovery is eventually consistent. Deployment and smoke-test automation waits u
 
 ### HTTP API
 
-- `POST /runs`: start one execution of the entire current valid graph; return HTTP 202 with workflow ID, run ID, and plan hash. Accept a small example payload and an optional request/idempotency key.
+- `POST /runs`: start one execution of the entire current valid graph; return HTTP 202 with workflow ID, run ID, and plan hash. Accept no request body (zero bytes) and an optional `Idempotency-Key` header; reject unexpected bytes with a bounded probe and HTTP 400. No JSON decoding or content-type requirement.
 - `GET /runs/{workflowID}`: return Temporal execution status and the associated run ID; include a result or failure summary when available. IDs identify one logical run; workflow ID reuse is disabled for this demo.
 - `GET /workers`: expose the current registry and validation status.
 - `GET /healthz` and `GET /readyz`: process health and readiness.
 
-Return a clear client error for malformed input and a service-unavailable response when no valid synchronized registry or Temporal connection is available. The API must not return a successful start if Temporal rejected it. Repeated requests with the same idempotency key map to the same workflow identity; conflicting reuse with different input must be rejected or explicitly documented, not silently start additional work.
+Return a clear client error for unexpected body bytes or malformed keys. Return service-unavailable for new starts without a valid synchronized registry, or when Temporal is unavailable. The API must not return a successful start if Temporal rejected it. Repeated requests with the same idempotency key return the original durable workflow/run identity, plan hash and available result, including after completion, restart or registry changes. Look up existing keyed runs before validating the current graph; registry changes never conflict with or rebind a key. Store and validate planHash Memo only, with no request hashing or input-conflict handling. Deduplication lasts within Temporal history retention; a new key selects the current validated plan.
 
 ### Plan snapshot and determinism
 
-Validate and snapshot the graph before starting the parent workflow. Pass the immutable execution plan, its hash, and example payload as workflow input. Do not read Kubernetes, perform HTTP calls, access wall-clock time, or consult mutable process state directly in workflow code.
+Validate and snapshot the graph before starting the parent workflow. Pass only the immutable execution plan (including its hash) as parent workflow input. Child and activity inputs carry only worker identity; results carry worker identity, never business data. Do not read Kubernetes, perform HTTP calls, access wall-clock time, or consult mutable process state directly in workflow code.
 
 Use Temporal workflow APIs for time, concurrency, and waiting. Avoid unsorted Go map iteration in workflow decisions. Configuration changes affect only newly started runs.
 
@@ -163,7 +163,7 @@ Use bounded activity retries and explicit execution timeouts. Allow enough time 
 
 ### Worker behavior
 
-The shared worker binary takes worker identity, Temporal endpoint/namespace, task queue, and simulated activity duration from configuration. A chi server exposes health/readiness. Example activity output includes worker identity and input; logs include workflow, run, activity, and queue identifiers.
+The shared worker binary takes worker identity, Temporal endpoint/namespace, task queue, and simulated activity duration from configuration. A chi server exposes health/readiness. Example activity output includes only worker identity; logs include workflow, run, activity, and queue identifiers.
 
 Activities must be safe to retry. Any later real external side effect must use an idempotency key. Graceful shutdown stops accepting new work and gives in-flight activities a bounded chance to finish before Kubernetes termination.
 
@@ -236,9 +236,9 @@ A successful demonstration proves:
 1. The cluster and infrastructure can be created using documented commands.
 2. Four annotated Services produce four valid registration ConfigMaps.
 3. All four worker Deployments can start at zero replicas while the orchestrator remains available.
-4. An API request returns workflow/run IDs and a plan hash.
+4. A body-free POST returns workflow/run IDs and a plan hash; unexpected body bytes return 400. Same-key retries return the original durable run/plan/result after completion, restart or registry changes.
 5. A activates and finishes; B and C then become eligible concurrently; D starts only after both succeed.
-6. The parent completes and its result is retrievable.
+6. The parent completes and its sorted worker-identity-only result is retrievable; parent/child/activity commands contain no business data.
 7. Workers eventually return to zero after completion and configured cooldown.
 8. Dependency updates change subsequent runs, not an already-started run.
 9. Invalid observed graphs reject new runs with actionable diagnostics before any Temporal workflow starts.
@@ -296,7 +296,7 @@ No additional product requirements are needed to prepare an implementation plan 
 - Kyverno support for the specified registration lifecycle and any necessary cleanup mechanism.
 - PostgreSQL/Temporal persistence compatibility, schema setup/migration versions, PVC configuration, and reset behavior.
 - Initial timeout, retry, shutdown, polling, and cooldown values.
-- Precise HTTP request/response schemas and idempotency-conflict handling.
+- Precise body-free HTTP request/response schemas and durable key-only idempotency handling.
 
 These are implementation choices or compatibility checks, not claims that the stack has already been deployed or tested.
 

@@ -9,21 +9,14 @@ const (
 	ExampleActivityName = "ExampleActivity"
 )
 
-type Payload struct {
-	Message string `json:"message"`
-}
 type ParentInput struct {
-	Plan        plan.Plan `json:"plan"`
-	Payload     Payload   `json:"payload"`
-	RequestHash string    `json:"requestHash"`
+	Plan plan.Plan `json:"plan"`
 }
 type ChildInput struct {
-	WorkerName string  `json:"workerName"`
-	Payload    Payload `json:"payload"`
+	WorkerName string `json:"workerName"`
 }
 type ChildResult struct {
 	WorkerName string `json:"workerName"`
-	Message    string `json:"message"`
 }
 type ParentResult struct {
 	Results []ChildResult `json:"results"`

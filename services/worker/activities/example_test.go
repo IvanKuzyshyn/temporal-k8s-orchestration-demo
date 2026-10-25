@@ -52,12 +52,12 @@ func TestExampleConfiguredDurationAndIdentity(t *testing.T) {
 	a := New("worker-c", 20*time.Millisecond)
 	env.RegisterActivityWithOptions(a.Example, activity.RegisterOptions{Name: contracts.ExampleActivityName})
 	start := time.Now()
-	encoded, err := env.ExecuteActivity(contracts.ExampleActivityName, contracts.ChildInput{WorkerName: "worker-c", Payload: contracts.Payload{Message: "hello"}})
+	encoded, err := env.ExecuteActivity(contracts.ExampleActivityName, contracts.ChildInput{WorkerName: "worker-c"})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(time.Since(start)).To(BeNumerically(">=", 20*time.Millisecond))
 	var result contracts.ChildResult
 	g.Expect(encoded.Get(&result)).To(Succeed())
-	g.Expect(result).To(Equal(contracts.ChildResult{WorkerName: "worker-c", Message: "hello"}))
+	g.Expect(result).To(Equal(contracts.ChildResult{WorkerName: "worker-c"}))
 }
 
 func TestExampleDefaultDurationAndPeriodicHeartbeat(t *testing.T) {
