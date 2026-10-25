@@ -5,13 +5,11 @@ Task 3 provides a chi handler and injectable Temporal gateway; executable server
 ## Start a run
 
 ```sh
-curl -i http://127.0.0.1:8080/runs \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: key' \
-  --data '{"message":"hello"}'
+curl -i -X POST http://127.0.0.1:8080/runs \
+  -H 'Idempotency-Key: key'
 ```
 
-The body must contain one JSON object with a required `message` string. Empty strings are valid. Decoding uses Go's `encoding/json` struct semantics: field names match case-insensitively (for example, `Message` is accepted), and duplicate message fields are accepted with the last value selected. The selected value must be a non-null string; for example, `{"message":null,"Message":"hello"}` is accepted as `hello`, while `{"message":"hello","message":null}` is rejected. Wrong-type message values are rejected even if followed by a valid duplicate. Missing/null messages, unknown fields, non-object roots, trailing JSON, malformed JSON and invalid UTF-8 are rejected. Whitespace surrounding the object is permitted. The entire body, **including trailing whitespace**, must be at most 16 KiB (16,384 bytes).
+Send no request body (zero bytes). No `Content-Type` header is required and no JSON request is decoded. Any body byte, including whitespace or `{}`, is rejected with a safe **400**; the handler probes at most one byte even for unknown-length/chunked requests. Read errors also return **400**. No request/business data is propagated through parent, child, activity inputs or results.
 
 `Idempotency-Key` is optional. If supplied it must have exactly one value of 1–128 printable ASCII characters (bytes 0x20–0x7e); present-but-empty is invalid. Application-visible spaces are significant, never trimmed by the handler. HTTP transports may normalize surrounding header whitespace before handing it to the application. Keys are opaque and are never included in application logs or response errors. Without a key, every request receives a cryptographically random workflow ID.
 
@@ -25,19 +23,15 @@ Example HTTP **202** response for the checked-in diamond registry (the run ID be
 
 A keyed workflow ID is `run-` followed by the lowercase SHA-256 hex digest of the key bytes. Temporal is the source of truth, not an in-memory map. The gateway uses SDK reject-duplicate workflow ID reuse, conflict-fail semantics, and explicit already-started errors. Concurrent lookup/start races are resolved by describing the durable execution after an already-started error.
 
-At creation, Temporal Memo stores separate `requestHash` and `planHash` strings. The request hash is SHA-256 over Go's compact JSON encoding of `contracts.Payload` (for hello, `{"message":"hello"}` hashes to `9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25`). It excludes registry data and uses the selected decoded message, not the original JSON spelling or duplicate fields. The plan hash is the shared canonical execution-plan hash. Hashes and execution identifiers are decoded and validated on durable reads; missing/corrupt metadata is an internal error, not a successful repeat.
+At creation, Temporal Memo stores `planHash`, the shared canonical execution-plan hash. The hash and execution identifiers are decoded and validated on durable reads; missing/corrupt metadata is an internal error, not a successful repeat. There is no request hash or input-conflict comparison; unrelated extra Memo fields are ignored.
 
-An equal-payload retry returns **202**, the **original** workflow ID/run ID/plan hash, and the current status/result if available, even after completion, orchestrator restart or registry changes. Existing keyed runs are looked up **before** validating the current registry, so a currently invalid or unsynchronized graph does not prevent their resolution. Reusing a key with a different payload returns **409**:
-
-```json
-{"error":"idempotency conflict"}
-```
+A retry with the same key returns **202**, the **original** workflow ID/run ID/plan hash, and the current status/result if available, even after completion, orchestrator restart or registry changes. Existing keyed runs are looked up **before** validating the current registry, so a currently invalid or unsynchronized graph does not prevent their resolution. A registry change never conflicts with or rebinds that key. A new key selects the current validated plan.
 
 New starts require a synchronized, nonempty, valid registry. The service copies the plan, rebuilds/validates execution identities, queues, workflow types, dependencies and cycles through the shared graph builder, and verifies the canonical plan/hash before starting. It never changes provider data. Parent execution starts use `ParentWorkflow`, queue `orchestrator.v1.temporal`, a 30-minute execution timeout, immutable input and **no workflow retry policy**.
 
 Deduplication lasts only while Temporal retains the execution history. Once retention expires or history is explicitly deleted, the key can create a new execution. There is no separate application idempotency database: durable metadata lives in Temporal's PostgreSQL-backed persistence when the runtime stack is deployed. These unit tests do not prove that infrastructure's persistence behavior.
 
-A failed lookup or ambiguous start timeout returns **503**, never an invented acceptance. A timeout may occur after Temporal accepted the workflow. Retry with the **same key and payload** to discover the durable execution; an unkeyed retry may start additional work.
+A failed lookup or ambiguous start timeout returns **503**, never an invented acceptance. A timeout may occur after Temporal accepted the workflow. Retry with the **same key** to discover the durable execution; an unkeyed retry may start additional work.
 
 ## Inspect a run
 
@@ -48,7 +42,7 @@ curl http://127.0.0.1:8080/runs/run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff
 HTTP **200** includes `workflowId`, `runId`, `planHash` and `status`. Status values are `running`, `completed`, `failed`, `canceled`, `terminated`, and `timedout`. Retrieval never waits for an unfinished workflow to finish. A completed run retrieves the result for the **described run ID**, with SDK following of later runs disabled. A completed example:
 
 ```json
-{"workflowId":"run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683","runId":"5e6b7b18-cc5b-4d20-b86e-88af2b1b29d4","planHash":"5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62","status":"completed","result":{"results":[{"workerName":"worker-a","message":"hello"},{"workerName":"worker-b","message":"hello"},{"workerName":"worker-c","message":"hello"},{"workerName":"worker-d","message":"hello"}]}}
+{"workflowId":"run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683","runId":"5e6b7b18-cc5b-4d20-b86e-88af2b1b29d4","planHash":"5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62","status":"completed","result":{"results":[{"workerName":"worker-a"},{"workerName":"worker-b"},{"workerName":"worker-c"},{"workerName":"worker-d"}]}}
 ```
 
 Terminal non-success states include a safe `failure` summary such as `"Workflow failed"`, not internal exception causes, stack traces or payloads. An unknown/expired workflow returns **404** with `{"error":"run not found"}`.
@@ -63,9 +57,7 @@ Terminal non-success states include a safe `failure` summary such as `"Workflow 
 
 Handler errors are JSON with a single `error` field and no sensitive internal details:
 
-- **400**: `{"error":"malformed request"}` — malformed payload or header.
-- **413**: `{"error":"request too large"}` — body exceeds 16 KiB.
-- **409**: `{"error":"idempotency conflict"}` — different payload for an existing key.
+- **400**: `{"error":"malformed request"}` — unexpected body bytes, body read error, or malformed idempotency header.
 - **503**: `{"error":"service unavailable"}` — new start with invalid/unsynchronized registry, unavailable Temporal, failed duplicate resolution, or ambiguous timeout.
 - **404**: `{"error":"run not found"}` — unknown run on GET.
 - **500**: `{"error":"internal error"}` — unexpected internal errors, including invalid durable metadata. No raw downstream error text is exposed.

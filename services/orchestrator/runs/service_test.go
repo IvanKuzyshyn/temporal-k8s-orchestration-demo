@@ -65,7 +65,7 @@ func (f *gateway) Start(_ context.Context, id string, input contracts.ParentInpu
 	if f.stored == nil {
 		f.stored = map[string]runs.Execution{}
 	}
-	f.stored[id] = runs.Execution{Run: r, RequestHash: input.RequestHash}
+	f.stored[id] = runs.Execution{Run: r}
 	f.input = input
 	if f.ambiguous {
 		f.ambiguous = false
@@ -78,25 +78,26 @@ func TestDurableRetriesSurviveRegistryChangesAndRestart(t *testing.T) {
 	p := &provider{snapshot(t)}
 	f := &gateway{}
 	s := runs.New(p, f)
-	first, err := s.Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	first, err := s.Start(context.Background(), "key")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(first.WorkflowID).To(Equal("run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"))
-	g.Expect(f.input.RequestHash).To(Equal("9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25"))
-	g.Expect(f.input.RequestHash).NotTo(Equal(first.PlanHash))
 	p.snapshot = registry.Snapshot{Synced: false, Problems: []string{"invalid now"}}
 	f.mu.Lock()
 	e := f.stored[first.WorkflowID]
 	e.Run.Status = "completed"
+	e.Run.Result = &contracts.ParentResult{Results: []contracts.ChildResult{{WorkerName: "worker-a"}}}
 	f.stored[first.WorkflowID] = e
 	f.mu.Unlock()
-	repeated, err := runs.New(p, f).Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	repeated, err := runs.New(p, f).Start(context.Background(), "key")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(repeated.RunID).To(Equal(first.RunID))
 	g.Expect(repeated.PlanHash).To(Equal(first.PlanHash))
 	g.Expect(repeated.Status).To(Equal("completed"))
 	g.Expect(f.starts).To(Equal(1))
-	_, err = s.Start(context.Background(), "key", contracts.Payload{Message: "other"})
-	g.Expect(errors.Is(err, runs.ErrConflict)).To(BeTrue())
+	g.Expect(repeated.Result).To(Equal(e.Run.Result))
+	_, err = s.Start(context.Background(), "new-key")
+	g.Expect(errors.Is(err, runs.ErrInvalidRegistry)).To(BeTrue())
+	g.Expect(f.starts).To(Equal(1))
 }
 func TestConcurrentSubmissionsAndAlreadyExistsRace(t *testing.T) {
 	g := NewWithT(t)
@@ -108,7 +109,7 @@ func TestConcurrentSubmissionsAndAlreadyExistsRace(t *testing.T) {
 	errs := make(chan error, 24)
 	for range 24 {
 		wg.Go(func() {
-			r, e := s.Start(context.Background(), "race", contracts.Payload{Message: "hello"})
+			r, e := s.Start(context.Background(), "race")
 			results <- r
 			errs <- e
 		})
@@ -127,23 +128,34 @@ func TestConcurrentSubmissionsAndAlreadyExistsRace(t *testing.T) {
 		g.Expect(r).To(Equal(original))
 	}
 	f.forceMiss = true
-	r, e := s.Start(context.Background(), "race", contracts.Payload{Message: "hello"})
+	r, e := s.Start(context.Background(), "race")
 	g.Expect(e).NotTo(HaveOccurred())
 	g.Expect(r).To(Equal(original))
 	g.Expect(f.starts).To(BeNumerically(">=", 2))
+	// Simulate a start race against a completed original run and a changed graph.
+	execution := f.stored[original.WorkflowID]
+	execution.Run.Status = "completed"
+	execution.Run.Result = &contracts.ParentResult{Results: []contracts.ChildResult{{WorkerName: "worker-a"}}}
+	f.stored[original.WorkflowID] = execution
+	changed := snapshot(t)
+	changed.Plan, e = plan.Build([]plan.Registration{{SchemaVersion: "1", WorkerName: "worker-b", TaskQueue: "worker-b.v1.temporal", WorkflowType: contracts.ChildWorkflowName, SourceServiceName: "worker-b", SourceServiceNamespace: "ns-b"}})
+	g.Expect(e).NotTo(HaveOccurred())
+	p.snapshot = changed
 	f.forceMiss = true
-	_, e = s.Start(context.Background(), "race", contracts.Payload{Message: "conflicting"})
-	g.Expect(errors.Is(e, runs.ErrConflict)).To(BeTrue())
+	r, e = s.Start(context.Background(), "race")
+	g.Expect(e).NotTo(HaveOccurred())
+	g.Expect(r).To(Equal(execution.Run))
+	g.Expect(r.PlanHash).NotTo(Equal(changed.Plan.Hash))
 }
 func TestAlreadyExistsLookupFailureNeverInventsAcceptance(t *testing.T) {
 	g := NewWithT(t)
 	f := &gateway{}
 	s := runs.New(&provider{snapshot(t)}, f)
-	_, err := s.Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	_, err := s.Start(context.Background(), "key")
 	g.Expect(err).NotTo(HaveOccurred())
 	f.forceMiss = true
 	f.duplicateLookupErr = runs.ErrUnavailable
-	result, err := s.Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	result, err := s.Start(context.Background(), "key")
 	g.Expect(errors.Is(err, runs.ErrUnavailable)).To(BeTrue())
 	g.Expect(result).To(BeZero())
 }
@@ -153,9 +165,9 @@ func TestAmbiguousStartIsUnavailableUntilDurableRetry(t *testing.T) {
 	f := &gateway{ambiguous: true}
 	p := &provider{snapshot(t)}
 	s := runs.New(p, f)
-	_, e := s.Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	_, e := s.Start(context.Background(), "key")
 	g.Expect(errors.Is(e, runs.ErrUnavailable)).To(BeTrue())
-	r, e := runs.New(p, f).Start(context.Background(), "key", contracts.Payload{Message: "hello"})
+	r, e := runs.New(p, f).Start(context.Background(), "key")
 	g.Expect(e).NotTo(HaveOccurred())
 	g.Expect(r.RunID).To(Equal("original-run"))
 	g.Expect(f.starts).To(Equal(1))
@@ -164,7 +176,7 @@ func TestNoStartOnLookupFailure(t *testing.T) {
 	g := NewWithT(t)
 	f := &gateway{lookupErr: runs.ErrUnavailable}
 	s := runs.New(&provider{snapshot(t)}, f)
-	_, e := s.Start(context.Background(), "key", contracts.Payload{})
+	_, e := s.Start(context.Background(), "key")
 	g.Expect(errors.Is(e, runs.ErrUnavailable)).To(BeTrue())
 	g.Expect(f.starts).To(BeZero())
 }
@@ -193,7 +205,7 @@ func TestNewStartsRevalidateCopiedPlans(t *testing.T) {
 			snap := snapshot(t)
 			mutate(&snap)
 			f := &gateway{}
-			_, e := runs.New(&provider{snap}, f).Start(context.Background(), "", contracts.Payload{})
+			_, e := runs.New(&provider{snap}, f).Start(context.Background(), "")
 			g.Expect(errors.Is(e, runs.ErrInvalidRegistry)).To(BeTrue())
 			g.Expect(f.starts).To(BeZero())
 		})
@@ -204,23 +216,23 @@ func TestStartsHaveIndependentInputsAndUniqueUnkeyedIDs(t *testing.T) {
 	p := &provider{snapshot(t)}
 	f := &gateway{}
 	s := runs.New(p, f)
-	a, e := s.Start(context.Background(), "", contracts.Payload{Message: "hello"})
+	a, e := s.Start(context.Background(), "")
 	g.Expect(e).NotTo(HaveOccurred())
-	originalHash := f.input.RequestHash
+	originalHash := f.input.Plan.Hash
 	p.snapshot.Plan.Nodes[0].Dependencies = append(p.snapshot.Plan.Nodes[0].Dependencies, "changed")
 	g.Expect(f.input.Plan.Nodes[0].Dependencies).To(BeEmpty())
 	p.snapshot = snapshot(t)
-	b, e := s.Start(context.Background(), "", contracts.Payload{Message: "hello"})
+	b, e := s.Start(context.Background(), "")
 	g.Expect(e).NotTo(HaveOccurred())
 	g.Expect(a.WorkflowID).NotTo(Equal(b.WorkflowID))
-	g.Expect(f.input.RequestHash).To(Equal(originalHash))
+	g.Expect(f.input.Plan.Hash).To(Equal(originalHash))
 }
 func TestRetryKeepsOriginalValidPlanAndNewKeyUsesChangedPlan(t *testing.T) {
 	g := NewWithT(t)
 	p := &provider{snapshot(t)}
 	f := &gateway{}
 	s := runs.New(p, f)
-	first, err := s.Start(context.Background(), "old", contracts.Payload{Message: "hello"})
+	first, err := s.Start(context.Background(), "old")
 	g.Expect(err).NotTo(HaveOccurred())
 	changed, err := plan.Build([]plan.Registration{
 		{SchemaVersion: "1", WorkerName: "worker-a", TaskQueue: "worker-a.v1.temporal", WorkflowType: "ExampleChildWorkflow", SourceServiceName: "worker-a", SourceServiceNamespace: "ns-a"},
@@ -228,14 +240,13 @@ func TestRetryKeepsOriginalValidPlanAndNewKeyUsesChangedPlan(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 	p.snapshot.Plan = changed
-	repeated, err := s.Start(context.Background(), "old", contracts.Payload{Message: "hello"})
+	repeated, err := s.Start(context.Background(), "old")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(repeated).To(Equal(first))
-	next, err := s.Start(context.Background(), "new", contracts.Payload{Message: "hello"})
+	next, err := s.Start(context.Background(), "new")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(next.PlanHash).To(Equal(changed.Hash))
 	g.Expect(next.PlanHash).NotTo(Equal(first.PlanHash))
-	g.Expect(f.input.RequestHash).To(Equal("9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25"))
 	p.snapshot.Plan.Nodes[1].Dependencies[0] = "mutated"
 	g.Expect(f.input.Plan.Nodes[1].Dependencies).To(Equal([]string{"worker-a"}))
 }
@@ -247,7 +258,7 @@ func TestServiceGetAndMalformedKeys(t *testing.T) {
 	_, e := s.Get(context.Background(), "unknown")
 	g.Expect(errors.Is(e, runs.ErrNotFound)).To(BeTrue())
 	for _, key := range []string{"bad\n", "é", string(make([]byte, 129))} {
-		_, e = s.Start(context.Background(), key, contracts.Payload{})
+		_, e = s.Start(context.Background(), key)
 		g.Expect(errors.Is(e, runs.ErrBadRequest)).To(BeTrue())
 	}
 	g.Expect(f.starts).To(BeZero())

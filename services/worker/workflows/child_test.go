@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -25,6 +26,7 @@ type activityRecorder struct {
 	name    string
 	options workflow.ActivityOptions
 	input   contracts.ChildInput
+	args    []any
 	// Tests may shorten heartbeat delivery without changing production defaults.
 	heartbeatTimeout time.Duration
 }
@@ -47,6 +49,7 @@ func (r *activityOutbound) ExecuteActivity(ctx workflow.Context, name string, ar
 	r.recorder.name = name
 	r.recorder.options = workflow.GetActivityOptions(ctx)
 	r.recorder.input = args[0].(contracts.ChildInput)
+	r.recorder.args = args
 	if r.recorder.heartbeatTimeout > 0 {
 		o := r.recorder.options
 		o.HeartbeatTimeout = r.recorder.heartbeatTimeout
@@ -65,14 +68,17 @@ func TestChildOptionsAndResult(t *testing.T) {
 	env.RegisterWorkflowWithOptions(Child, workflow.RegisterOptions{Name: contracts.ChildWorkflowName})
 	a := activities.New("worker-b", time.Millisecond)
 	env.RegisterActivityWithOptions(a.Example, activity.RegisterOptions{Name: contracts.ExampleActivityName})
-	input := contracts.ChildInput{WorkerName: "worker-b", Payload: contracts.Payload{Message: "hello"}}
+	input := contracts.ChildInput{WorkerName: "worker-b"}
 	env.ExecuteWorkflow(contracts.ChildWorkflowName, input)
 	g.Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
 	var result contracts.ChildResult
 	g.Expect(env.GetWorkflowResult(&result)).To(Succeed())
-	g.Expect(result).To(Equal(contracts.ChildResult{WorkerName: "worker-b", Message: "hello"}))
+	g.Expect(result).To(Equal(contracts.ChildResult{WorkerName: "worker-b"}))
 	g.Expect(recorder.name).To(Equal("ExampleActivity"))
 	g.Expect(recorder.input).To(Equal(input))
+	encoded, err := json.Marshal(recorder.args)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(string(encoded)).To(MatchJSON(`[{"workerName":"worker-b"}]`))
 	o := recorder.options
 	g.Expect(o.TaskQueue).To(Equal("worker-b.v1.temporal"))
 	g.Expect(o.StartToCloseTimeout).To(Equal(time.Minute))
@@ -97,12 +103,12 @@ func TestChildActivityRetries(t *testing.T) {
 			env.RegisterActivityWithOptions(func(ctx context.Context, in contracts.ChildInput) (contracts.ChildResult, error) {
 				attempts.Add(1)
 				if succeed && activity.GetInfo(ctx).Attempt == 3 {
-					return contracts.ChildResult{WorkerName: in.WorkerName, Message: in.Payload.Message}, nil
+					return contracts.ChildResult{WorkerName: in.WorkerName}, nil
 				}
 				return contracts.ChildResult{}, fmt.Errorf("transient failure")
 			}, activity.RegisterOptions{Name: contracts.ExampleActivityName})
 			origin := env.Now()
-			env.ExecuteWorkflow(contracts.ChildWorkflowName, contracts.ChildInput{WorkerName: "worker-a", Payload: contracts.Payload{Message: "hello"}})
+			env.ExecuteWorkflow(contracts.ChildWorkflowName, contracts.ChildInput{WorkerName: "worker-a"})
 			g.Expect(attempts.Load()).To(Equal(int32(3)))
 			g.Expect(env.Now().Sub(origin)).To(Equal(6 * time.Second))
 			if succeed {

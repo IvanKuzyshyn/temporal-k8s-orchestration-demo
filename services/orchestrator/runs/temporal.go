@@ -30,7 +30,7 @@ func (t *Temporal) Start(ctx context.Context, id string, input contracts.ParentI
 		WorkflowIDReusePolicy:                    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowIDConflictPolicy:                 enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
-		Memo:                                     map[string]interface{}{"requestHash": input.RequestHash, "planHash": input.Plan.Hash},
+		Memo:                                     map[string]interface{}{"planHash": input.Plan.Hash},
 	}, contracts.ParentWorkflowName, input)
 	if err != nil {
 		return Run{}, sdkError(err)
@@ -53,16 +53,14 @@ func (t *Temporal) Get(ctx context.Context, id string) (Execution, error) {
 	if info.Execution == nil || info.Execution.WorkflowId != id || info.Execution.RunId == "" || info.Memo == nil {
 		return invalid()
 	}
-	var requestHash, planHash string
+	var planHash string
 	dc := converter.GetDefaultDataConverter()
-	for key, dst := range map[string]*string{"requestHash": &requestHash, "planHash": &planHash} {
-		p := info.Memo.Fields[key]
-		if p == nil {
-			return invalid()
-		}
-		if err := dc.FromPayload(p, dst); err != nil || !validHash(*dst) {
-			return invalid()
-		}
+	p := info.Memo.Fields["planHash"]
+	if p == nil {
+		return invalid()
+	}
+	if err := dc.FromPayload(p, &planHash); err != nil || !validHash(planHash) {
+		return invalid()
 	}
 	status := info.Status
 	switch status {
@@ -83,7 +81,7 @@ func (t *Temporal) Get(ctx context.Context, id string) (Execution, error) {
 		// Summaries intentionally do not expose application error causes or payloads.
 		run.Failure = "Workflow " + run.Status
 	}
-	return Execution{Run: run, RequestHash: requestHash}, nil
+	return Execution{Run: run}, nil
 }
 func sdkError(err error) error {
 	var duplicate *serviceerror.WorkflowExecutionAlreadyStarted

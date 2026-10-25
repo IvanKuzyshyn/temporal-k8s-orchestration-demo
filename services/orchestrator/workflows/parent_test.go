@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 type childCommand struct {
 	name    string
 	input   contracts.ChildInput
+	args    []any
 	options workflow.ChildWorkflowOptions
 }
 type commandRecorder struct {
@@ -43,7 +46,7 @@ func (r *recordInbound) Init(next interceptor.WorkflowOutboundInterceptor) error
 	return r.Next.Init(&recordOutbound{WorkflowOutboundInterceptorBase: interceptor.WorkflowOutboundInterceptorBase{Next: next}, recorder: r.recorder})
 }
 func (r *recordOutbound) ExecuteChildWorkflow(ctx workflow.Context, name string, args ...any) workflow.ChildWorkflowFuture {
-	r.recorder.commands = append(r.recorder.commands, childCommand{name, args[0].(contracts.ChildInput), workflow.GetChildWorkflowOptions(ctx)})
+	r.recorder.commands = append(r.recorder.commands, childCommand{name: name, input: args[0].(contracts.ChildInput), args: args, options: workflow.GetChildWorkflowOptions(ctx)})
 	return r.Next.ExecuteChildWorkflow(ctx, name, args...)
 }
 
@@ -52,7 +55,7 @@ func graph(nodes ...plan.Node) contracts.ParentInput {
 		nodes[i].TaskQueue = nodes[i].Name + ".v1.temporal"
 		nodes[i].WorkflowType = contracts.ChildWorkflowName
 	}
-	return contracts.ParentInput{Plan: plan.Plan{SchemaVersion: "1", Nodes: nodes, Hash: "immutable-plan-hash"}, Payload: contracts.Payload{Message: "hello"}, RequestHash: "request-hash"}
+	return contracts.ParentInput{Plan: plan.Plan{SchemaVersion: "1", Nodes: nodes, Hash: "immutable-plan-hash"}}
 }
 
 // The test child uses real workflow timers/cancellation, replacing only worker work
@@ -77,7 +80,13 @@ func TestParentScheduling(t *testing.T) {
 			recorder := &commandRecorder{}
 			env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{recorder}})
 			env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "parent-identity", TaskQueue: "orchestrator.v1.temporal"})
-			env.RegisterWorkflowWithOptions(Parent, workflow.RegisterOptions{Name: contracts.ParentWorkflowName})
+			var before, after []byte
+			env.RegisterWorkflowWithOptions(func(ctx workflow.Context, in contracts.ParentInput) (contracts.ParentResult, error) {
+				before, _ = json.Marshal(in)
+				result, err := Parent(ctx, in)
+				after, _ = json.Marshal(in)
+				return result, err
+			}, workflow.RegisterOptions{Name: contracts.ParentWorkflowName})
 			starts := map[string]time.Duration{}
 			origin := env.Now()
 			env.RegisterWorkflowWithOptions(func(ctx workflow.Context, in contracts.ChildInput) (contracts.ChildResult, error) {
@@ -85,22 +94,30 @@ func TestParentScheduling(t *testing.T) {
 				if err := workflow.Sleep(ctx, tt.durations[in.WorkerName]); err != nil {
 					return contracts.ChildResult{}, err
 				}
-				return contracts.ChildResult{WorkerName: in.WorkerName, Message: in.Payload.Message}, nil
+				return contracts.ChildResult{WorkerName: in.WorkerName}, nil
 			}, workflow.RegisterOptions{Name: contracts.ChildWorkflowName})
-			env.ExecuteWorkflow(contracts.ParentWorkflowName, tt.input)
+			// Deliberately reverse input order: Parent must sort its own copy,
+			// not mutate the workflow's decoded immutable plan.
+			input := tt.input
+			input.Plan.Nodes = append([]plan.Node(nil), input.Plan.Nodes...)
+			slices.Reverse(input.Plan.Nodes)
+			env.ExecuteWorkflow(contracts.ParentWorkflowName, input)
 			g.Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
 			g.Expect(starts).To(Equal(tt.starts))
+			g.Expect(after).To(Equal(before))
 			var result contracts.ParentResult
 			g.Expect(env.GetWorkflowResult(&result)).To(Succeed())
 			expected := make([]contracts.ChildResult, 0, len(tt.input.Plan.Nodes))
 			for _, node := range tt.input.Plan.Nodes {
-				expected = append(expected, contracts.ChildResult{WorkerName: node.Name, Message: "hello"})
+				expected = append(expected, contracts.ChildResult{WorkerName: node.Name})
 			}
 			g.Expect(result.Results).To(Equal(expected))
 			g.Expect(recorder.commands).To(HaveLen(len(expected)))
 			for _, cmd := range recorder.commands {
 				g.Expect(cmd.name).To(Equal("ExampleChildWorkflow"))
-				g.Expect(cmd.input.Payload.Message).To(Equal("hello"))
+				encoded, err := json.Marshal(cmd.args)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(string(encoded)).To(MatchJSON(`[{"workerName":"` + cmd.input.WorkerName + `"}]`))
 				g.Expect(cmd.options.TaskQueue).To(Equal(cmd.input.WorkerName + ".v1.temporal"))
 				g.Expect(cmd.options.WorkflowID).To(Equal("parent-identity/" + cmd.input.WorkerName))
 				g.Expect(cmd.options.WorkflowExecutionTimeout).To(Equal(15 * time.Minute))
@@ -154,7 +171,7 @@ func TestParentFailureAndCancellation(t *testing.T) {
 				if err := workflow.Sleep(ctx, time.Hour); err != nil {
 					return contracts.ChildResult{}, err
 				}
-				return contracts.ChildResult{WorkerName: in.WorkerName, Message: in.Payload.Message}, nil
+				return contracts.ChildResult{WorkerName: in.WorkerName}, nil
 			}, workflow.RegisterOptions{Name: contracts.ChildWorkflowName})
 			input := graph(plan.Node{Name: "worker-a"}, plan.Node{Name: "worker-b", Dependencies: []string{"worker-a"}}, plan.Node{Name: "worker-c", Dependencies: []string{"worker-a"}}, plan.Node{Name: "worker-d", Dependencies: []string{"worker-b", "worker-c"}})
 			if mode != "root failure blocks diamond" {

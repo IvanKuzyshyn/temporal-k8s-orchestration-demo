@@ -83,7 +83,7 @@ func Parent(ctx workflow.Context, input contracts.ParentInput) (contracts.Parent
 				// Workflow retries are intentionally unset; activity retries handle recovery.
 			})
 			states[i].cancel = cancel
-			states[i].future = workflow.ExecuteChildWorkflow(childCtx, node.WorkflowType, contracts.ChildInput{WorkerName: node.Name, Payload: input.Payload})
+			states[i].future = workflow.ExecuteChildWorkflow(childCtx, node.WorkflowType, contracts.ChildInput{WorkerName: node.Name})
 		}
 		selector := workflow.NewSelector(ctx)
 		running := false

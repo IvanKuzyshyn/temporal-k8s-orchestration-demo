@@ -1,37 +1,27 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"time"
-	"unicode/utf8"
 
-	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/contracts"
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/services/orchestrator/runs"
 	"github.com/go-chi/chi/v5"
 )
 
-const maxBody = 16 * 1024
-
 func (h handlers) start(w http.ResponseWriter, r *http.Request) {
-	// Read through the limit, including whitespace after a valid JSON prefix.
-	data, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-	if len(data) > maxBody {
-		fail(w, http.StatusRequestEntityTooLarge, "request too large")
-		return
-	}
-	if err != nil {
-		fail(w, http.StatusBadRequest, "malformed request")
-		return
-	}
-	payload, err := decodePayload(data)
-	if err != nil {
-		fail(w, http.StatusBadRequest, "malformed request")
-		return
+	// Probe at most one byte, including for unknown-length/chunked requests.
+	// Do not trust ContentLength or buffer unexpected input.
+	if r.Body != nil {
+		var probe [1]byte
+		n, err := io.ReadFull(r.Body, probe[:])
+		if n != 0 || err != io.EOF {
+			fail(w, http.StatusBadRequest, "malformed request")
+			return
+		}
 	}
 	key := ""
 	if keys, present := r.Header[http.CanonicalHeaderKey("Idempotency-Key")]; present {
@@ -41,7 +31,7 @@ func (h handlers) start(w http.ResponseWriter, r *http.Request) {
 		}
 		key = keys[0]
 	}
-	run, err := h.service.Start(r.Context(), key, payload)
+	run, err := h.service.Start(r.Context(), key)
 	if err != nil {
 		respondError(w, err)
 		return
@@ -49,26 +39,6 @@ func (h handlers) start(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusAccepted, run)
 }
 
-type startRequest struct {
-	Message *string `json:"message"`
-}
-
-func decodePayload(data []byte) (contracts.Payload, error) {
-	bad := runs.ErrBadRequest
-	if !utf8.Valid(data) {
-		return contracts.Payload{}, bad
-	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	var request startRequest
-	if err := d.Decode(&request); err != nil || request.Message == nil {
-		return contracts.Payload{}, bad
-	}
-	if err := d.Decode(new(any)); err != io.EOF {
-		return contracts.Payload{}, bad
-	}
-	return contracts.Payload{Message: *request.Message}, nil
-}
 func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 	run, err := h.service.Get(r.Context(), chi.URLParam(r, "workflowID"))
 	if err != nil {
@@ -94,8 +64,6 @@ func respondError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, runs.ErrBadRequest):
 		fail(w, 400, "malformed request")
-	case errors.Is(err, runs.ErrConflict):
-		fail(w, 409, "idempotency conflict")
 	case errors.Is(err, runs.ErrInvalidRegistry), errors.Is(err, runs.ErrUnavailable):
 		fail(w, 503, "service unavailable")
 	case errors.Is(err, runs.ErrNotFound):

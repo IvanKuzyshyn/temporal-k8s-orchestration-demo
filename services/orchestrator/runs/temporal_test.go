@@ -2,6 +2,7 @@ package runs_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -68,23 +69,20 @@ func (r *workflowRun) GetWithOptions(ctx context.Context, v interface{}, options
 	return r.Get(ctx, v)
 }
 
-const requestHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const planHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func description(t *testing.T, status enumspb.WorkflowExecutionStatus) *workflowservice.DescribeWorkflowExecutionResponse {
 	t.Helper()
 	g := NewWithT(t)
-	r, e := converter.GetDefaultDataConverter().ToPayload(requestHash)
-	g.Expect(e).NotTo(HaveOccurred())
 	p, e := converter.GetDefaultDataConverter().ToPayload(planHash)
 	g.Expect(e).NotTo(HaveOccurred())
-	return &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{Execution: &commonpb.WorkflowExecution{WorkflowId: "workflow-id", RunId: "original-run"}, Status: status, Memo: &commonpb.Memo{Fields: map[string]*commonpb.Payload{"requestHash": r, "planHash": p}}}}
+	return &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{Execution: &commonpb.WorkflowExecution{WorkflowId: "workflow-id", RunId: "original-run"}, Status: status, Memo: &commonpb.Memo{Fields: map[string]*commonpb.Payload{"planHash": p}}}}
 }
 func TestTemporalOutgoingStartPolicyAndMemo(t *testing.T) {
 	g := NewWithT(t)
 	f := &sdkClient{handle: &workflowRun{}}
 	adapter := runs.NewTemporal(f)
-	input := contracts.ParentInput{Plan: snapshot(t).Plan, Payload: contracts.Payload{Message: "hello"}, RequestHash: requestHash}
+	input := contracts.ParentInput{Plan: snapshot(t).Plan}
 	r, e := adapter.Start(context.Background(), "workflow-id", input)
 	g.Expect(e).NotTo(HaveOccurred())
 	g.Expect(r.RunID).To(Equal("original-run"))
@@ -98,16 +96,21 @@ func TestTemporalOutgoingStartPolicyAndMemo(t *testing.T) {
 	g.Expect(f.options.WorkflowExecutionErrorWhenAlreadyStarted).To(BeTrue())
 	g.Expect(f.workflow).To(Equal(contracts.ParentWorkflowName))
 	g.Expect(f.args).To(Equal([]interface{}{input}))
-	g.Expect(f.options.Memo).To(Equal(map[string]interface{}{"requestHash": requestHash, "planHash": input.Plan.Hash}))
+	g.Expect(f.options.Memo).To(Equal(map[string]interface{}{"planHash": input.Plan.Hash}))
+	encoded, err := json.Marshal(f.args[0])
+	g.Expect(err).NotTo(HaveOccurred())
+	var envelope map[string]json.RawMessage
+	g.Expect(json.Unmarshal(encoded, &envelope)).To(Succeed())
+	g.Expect(envelope).To(HaveLen(1))
+	g.Expect(envelope).To(HaveKey("plan"))
 }
 func TestTemporalDescribeMemoAndNonblockingUnfinishedGet(t *testing.T) {
 	for _, status := range []enumspb.WorkflowExecutionStatus{enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED, enumspb.WORKFLOW_EXECUTION_STATUS_FAILED, enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED, enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED, enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT} {
 		t.Run(status.String(), func(t *testing.T) {
 			g := NewWithT(t)
-			f := &sdkClient{description: description(t, status), handle: &workflowRun{result: contracts.ParentResult{Results: []contracts.ChildResult{{WorkerName: "worker-a", Message: "hello"}}}}}
+			f := &sdkClient{description: description(t, status), handle: &workflowRun{result: contracts.ParentResult{Results: []contracts.ChildResult{{WorkerName: "worker-a"}}}}}
 			r, e := runs.NewTemporal(f).Get(context.Background(), "workflow-id")
 			g.Expect(e).NotTo(HaveOccurred())
-			g.Expect(r.RequestHash).To(Equal(requestHash))
 			g.Expect(r.Run.PlanHash).To(Equal(planHash))
 			g.Expect(r.Run.RunID).To(Equal("original-run"))
 			if status == enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED {
@@ -125,8 +128,8 @@ func TestTemporalDescribeMemoAndNonblockingUnfinishedGet(t *testing.T) {
 	}
 }
 func TestTemporalRejectsCorruptDurableMetadata(t *testing.T) {
-	mutations := map[string]func(*workflowservice.DescribeWorkflowExecutionResponse){"nil": func(d *workflowservice.DescribeWorkflowExecutionResponse) { d.WorkflowExecutionInfo = nil }, "memo": func(d *workflowservice.DescribeWorkflowExecutionResponse) { d.WorkflowExecutionInfo.Memo = nil }, "request": func(d *workflowservice.DescribeWorkflowExecutionResponse) {
-		delete(d.WorkflowExecutionInfo.Memo.Fields, "requestHash")
+	mutations := map[string]func(*workflowservice.DescribeWorkflowExecutionResponse){"nil": func(d *workflowservice.DescribeWorkflowExecutionResponse) { d.WorkflowExecutionInfo = nil }, "memo": func(d *workflowservice.DescribeWorkflowExecutionResponse) { d.WorkflowExecutionInfo.Memo = nil }, "missing plan": func(d *workflowservice.DescribeWorkflowExecutionResponse) {
+		delete(d.WorkflowExecutionInfo.Memo.Fields, "planHash")
 	}, "plan": func(d *workflowservice.DescribeWorkflowExecutionResponse) {
 		d.WorkflowExecutionInfo.Memo.Fields["planHash"] = &commonpb.Payload{Data: []byte("bad")}
 	}, "run": func(d *workflowservice.DescribeWorkflowExecutionResponse) {
@@ -146,6 +149,16 @@ func TestTemporalRejectsCorruptDurableMetadata(t *testing.T) {
 		})
 	}
 }
+func TestTemporalIgnoresObsoleteExtraMemo(t *testing.T) {
+	g := NewWithT(t)
+	d := description(t, enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
+	// Extra historic metadata must not be decoded or required.
+	d.WorkflowExecutionInfo.Memo.Fields["requestHash"] = &commonpb.Payload{Data: []byte("not decodable")}
+	e, err := runs.NewTemporal(&sdkClient{description: d}).Get(context.Background(), "workflow-id")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(e.Run.PlanHash).To(Equal(planHash))
+}
+
 func TestTemporalCompletedResultFailuresRemainTruthful(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

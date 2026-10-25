@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -18,7 +17,6 @@ import (
 
 var (
 	ErrBadRequest      = errors.New("malformed request")
-	ErrConflict        = errors.New("idempotency conflict")
 	ErrInvalidRegistry = errors.New("registry unavailable")
 	ErrUnavailable     = errors.New("Temporal unavailable")
 	ErrNotFound        = errors.New("run not found")
@@ -36,8 +34,7 @@ type Run struct {
 
 // Execution carries metadata read from durable storage, never process-local dedupe.
 type Execution struct {
-	Run         Run
-	RequestHash string
+	Run Run
 }
 type Gateway interface {
 	Start(context.Context, string, contracts.ParentInput) (Run, error)
@@ -65,21 +62,16 @@ func ValidKey(key string) bool {
 	return true
 }
 func hash(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
-func (s *Service) Start(ctx context.Context, key string, payload contracts.Payload) (Run, error) {
+func (s *Service) Start(ctx context.Context, key string) (Run, error) {
 	if key != "" && !ValidKey(key) {
 		return Run{}, ErrBadRequest
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return Run{}, err
-	}
-	requestHash := hash(data)
 	var id string
 	if key != "" {
 		id = "run-" + hash([]byte(key))
 		existing, err := s.gateway.Get(ctx, id)
 		if err == nil {
-			return repeat(existing, requestHash)
+			return repeat(existing)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return Run{}, err
@@ -95,22 +87,19 @@ func (s *Service) Start(ctx context.Context, key string, payload contracts.Paylo
 	if err != nil {
 		return Run{}, err
 	}
-	run, err := s.gateway.Start(ctx, id, contracts.ParentInput{Plan: inputPlan, Payload: payload, RequestHash: requestHash})
+	run, err := s.gateway.Start(ctx, id, contracts.ParentInput{Plan: inputPlan})
 	if errors.Is(err, ErrAlreadyExists) && key != "" {
 		existing, lookupErr := s.gateway.Get(ctx, id)
 		if lookupErr != nil {
 			return Run{}, ErrUnavailable
 		}
-		return repeat(existing, requestHash)
+		return repeat(existing)
 	}
 	return run, err
 }
-func repeat(existing Execution, requestHash string) (Run, error) {
-	if !validHash(existing.RequestHash) || !validHash(existing.Run.PlanHash) || existing.Run.WorkflowID == "" || existing.Run.RunID == "" {
+func repeat(existing Execution) (Run, error) {
+	if !validHash(existing.Run.PlanHash) || existing.Run.WorkflowID == "" || existing.Run.RunID == "" {
 		return Run{}, errors.New("invalid durable execution metadata")
-	}
-	if existing.RequestHash != requestHash {
-		return Run{}, ErrConflict
 	}
 	return existing.Run, nil
 }
