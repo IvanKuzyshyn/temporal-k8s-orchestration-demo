@@ -49,35 +49,25 @@ func (h handlers) start(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusAccepted, run)
 }
 
-// Token-level shape checking avoids encoding/json's case-insensitive field
-// matching, duplicate-key acceptance, and null-to-string zero-value behavior.
+type startRequest struct {
+	Message *string `json:"message"`
+}
+
 func decodePayload(data []byte) (contracts.Payload, error) {
 	bad := runs.ErrBadRequest
 	if !utf8.Valid(data) {
 		return contracts.Payload{}, bad
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
-	token, err := d.Token()
-	if err != nil || token != json.Delim('{') {
+	d.DisallowUnknownFields()
+	var request startRequest
+	if err := d.Decode(&request); err != nil || request.Message == nil {
 		return contracts.Payload{}, bad
 	}
-	token, err = d.Token()
-	if err != nil || token != "message" {
+	if err := d.Decode(new(any)); err != io.EOF {
 		return contracts.Payload{}, bad
 	}
-	token, err = d.Token()
-	message, ok := token.(string)
-	if err != nil || !ok {
-		return contracts.Payload{}, bad
-	}
-	token, err = d.Token()
-	if err != nil || token != json.Delim('}') {
-		return contracts.Payload{}, bad
-	}
-	if _, err = d.Token(); err != io.EOF {
-		return contracts.Payload{}, bad
-	}
-	return contracts.Payload{Message: message}, nil
+	return contracts.Payload{Message: *request.Message}, nil
 }
 func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 	run, err := h.service.Get(r.Context(), chi.URLParam(r, "workflowID"))

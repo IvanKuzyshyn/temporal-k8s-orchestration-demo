@@ -82,13 +82,13 @@ func request(h http.Handler, method, path, body string, keys ...string) *httptes
 	h.ServeHTTP(w, r)
 	return w
 }
-func TestStrictStartRequestValidation(t *testing.T) {
+func TestStartRequestValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		keys       []string
 		status     int
 	}{
-		{"empty body", ``, nil, 400}, {"boolean", `{"message":true}`, nil, 400}, {"invalid UTF-8", "{\"message\":\"\xff\"}", nil, 400}, {"valid", `{"message":"hello"}`, nil, 202}, {"empty string", `{"message":""}`, nil, 202}, {"missing", `{}`, nil, 400}, {"null field", `{"message":null}`, nil, 400}, {"null object", `null`, nil, 400}, {"number", `{"message":1}`, nil, 400}, {"array", `[]`, nil, 400}, {"unknown", `{"message":"x","secret":1}`, nil, 400}, {"case", `{"Message":"x"}`, nil, 400}, {"duplicate field", `{"message":"x","message":"y"}`, nil, 400}, {"trailing", `{"message":"x"} {}`, nil, 400}, {"broken", `{"message":`, nil, 400},
+		{"empty body", ``, nil, 400}, {"boolean", `{"message":true}`, nil, 400}, {"invalid UTF-8", "{\"message\":\"\xff\"}", nil, 400}, {"valid", `{"message":"hello"}`, nil, 202}, {"empty string", `{"message":""}`, nil, 202}, {"missing", `{}`, nil, 400}, {"null field", `{"message":null}`, nil, 400}, {"null object", `null`, nil, 400}, {"number", `{"message":1}`, nil, 400}, {"array", `[]`, nil, 400}, {"unknown", `{"message":"x","secret":1}`, nil, 400}, {"case", `{"Message":"x"}`, nil, 202}, {"duplicate field", `{"message":"x","message":"y"}`, nil, 202}, {"duplicate final null", `{"message":"x","message":null}`, nil, 400}, {"duplicate wrong type first", `{"message":1,"message":"x"}`, nil, 400}, {"duplicate wrong type last", `{"message":"x","message":1}`, nil, 400}, {"unknown before message", `{"secret":1,"message":"x"}`, nil, 400}, {"object field", `{"message":{}}`, nil, 400}, {"array field", `{"message":[]}`, nil, 400}, {"root string", `"hello"`, nil, 400}, {"trailing", `{"message":"x"} {}`, nil, 400}, {"trailing malformed", `{"message":"x"} !`, nil, 400}, {"broken", `{"message":`, nil, 400},
 		{"oversize", `{"message":"` + strings.Repeat("x", 16384) + `"}`, nil, 413}, {"oversize trailing whitespace", `{"message":"x"}` + strings.Repeat(" ", 16384), nil, 413}, {"exact limit", `{"message":"x"}` + strings.Repeat(" ", 16384-len(`{"message":"x"}`)), nil, 202},
 		{"empty key", `{"message":"x"}`, []string{""}, 400}, {"long key", `{"message":"x"}`, []string{strings.Repeat("a", 129)}, 400}, {"control key", `{"message":"x"}`, []string{"bad\t"}, 400}, {"unicode key", `{"message":"x"}`, []string{"é"}, 400}, {"multiple keys", `{"message":"x"}`, []string{"a", "b"}, 400}, {"printable including spaces", `{"message":"x"}`, []string{" !~ "}, 202}, {"128 key", `{"message":"x"}`, []string{strings.Repeat("a", 128)}, 202},
 	} {
@@ -104,6 +104,31 @@ func TestStrictStartRequestValidation(t *testing.T) {
 		})
 	}
 }
+func TestStartRequestSelectedMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"case insensitive", `{"Message":"hello"}`},
+		{"uppercase", `{"MESSAGE":"hello"}`},
+		{"duplicate last wins", `{"message":"discarded","message":"hello"}`},
+		{"mixed casing last wins", `{"message":"discarded","Message":"hello"}`},
+		{"null before string", `{"message":null,"message":"hello"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			_, f, h := fixture(t)
+			response := request(h, "POST", "/runs", tc.body, "selected-message")
+			g.Expect(response.Code).To(Equal(202))
+			var run runs.Run
+			g.Expect(json.Unmarshal(response.Body.Bytes(), &run)).To(Succeed())
+			g.Expect(f.executions[run.WorkflowID].RequestHash).To(Equal("9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25"))
+			g.Expect(request(h, "POST", "/runs", `{"message":"hello"}`, "selected-message").Code).To(Equal(202))
+			g.Expect(request(h, "POST", "/runs", `{"message":"discarded"}`, "selected-message").Code).To(Equal(409))
+			g.Expect(f.starts).To(Equal(1))
+		})
+	}
+}
+
 func TestHTTPDurableRepeatConflictAndRegistryChange(t *testing.T) {
 	g := NewWithT(t)
 	p, f, h := fixture(t)
