@@ -48,6 +48,10 @@ run = "bash scripts/compose.sh down"
 description = "DESTRUCTIVE: remove this project's history (requires RESET_CONFIRM=1)"
 run = "bash scripts/compose.sh reset"
 
+[tasks."compose:cleanup"]
+description = "CI job-scoped cleanup; aggregate discovery/reset failures without skipping normal cleanup"
+run = "bash scripts/compose-cleanup.sh"
+
 [tasks."compose:config"]
 description = "Validate Compose configuration without rendering credentials"
 run = "bash scripts/compose.sh config"

@@ -93,8 +93,17 @@ separate local credential file. Don't reuse another project's name.
 - `bash scripts/compose.sh diagnostics`: bounded project-scoped status and only
   application logs, no environment dumps or raw infrastructure logs.
 - PR workflows reuse the local setup-mise action and these same tasks on Linux
-  amd64; cleanup is unconditional and project-scoped. CI evidence is distinct
-  from local host evidence; see versions.md.
+  amd64. `mise run compose:cleanup` requires an explicit
+  `COMPOSE_PROJECT_NAME=temporal-demo-ci-<run-id>-<attempt>`; it checks fixture
+  discovery, attempts every matching fixture and the job's normal project even
+  after failures, and returns an aggregate failure. It never defaults to resetting
+  the ordinary demo. CI evidence is distinct from local host evidence; see versions.md.
+
+Smoke readiness/completion each have an elapsed `SMOKE_WAIT_SECONDS` budget
+(default180), not180 attempts. Requests are capped at the remaining budget (at
+most5s), with at most one second of shell-clock granularity; failure diagnostics
+run afterward. Slow or unavailable endpoints cannot multiply the budget by the
+per-request timeout.
 
 `services/orchestrator/cmd/orchestrator` wires chi, static registry and parent
 poller. `services/worker/cmd/worker` registers the fixed child workflow and
@@ -111,4 +120,6 @@ Liveness is independent of Temporal; readiness requires SDK worker Start/polling
 and a bounded Temporal health RPC. Startup connection retries are bounded to90s
 and obey cancellation. SIGTERM marks unready and grants SDK worker Stop30s;
 Compose grace40s includes HTTP shutdown. Logs use JSON slog through the SDK
-adapter, including queue and activity/workflow/run IDs.
+adapter, including queue and activity/workflow/run IDs. SDK fatal errors atomically
+mark the process unready and block new starts, including a fatal racing startup;
+the process joins SDK shutdown outside the callback and returns the fatal cause.

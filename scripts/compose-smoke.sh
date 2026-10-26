@@ -15,10 +15,25 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 request() { curl --silent --show-error --max-time 5 "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
+[[ $wait_seconds =~ ^[1-9][0-9]*$ ]] || fail 'SMOKE_WAIT_SECONDS must be a positive integer'
+wait_seconds=$((10#$wait_seconds))
+# Bash SECONDS is elapsed time (one-second resolution), not an attempt count.
+# Cap every polling request and sleep by the remaining phase budget. Allow at
+# most one clock tick of scheduling granularity, plus failure diagnostics.
+poll_request() {
+  local remaining=$((deadline - SECONDS))
+  ((remaining > 0)) || return 1
+  if ((remaining > 5)); then remaining=5; fi
+  request --max-time "$remaining" "$@"
+}
+poll_pause() {
+  if ((SECONDS < deadline)); then sleep 1; fi
+}
 ready=false
-for ((i=0;i<wait_seconds;i++)); do
-  if request --fail "$base/readyz" > /dev/null 2>&1; then ready=true; break; fi
-  sleep 1
+deadline=$((SECONDS + wait_seconds))
+while ((SECONDS < deadline)); do
+  if poll_request --fail "$base/readyz" > /dev/null 2>&1; then ready=true; break; fi
+  poll_pause
 done
 if [[ $ready != true ]]; then echo "FAIL: API readiness did not succeed within ${wait_seconds}s" >&2; exit 1; fi
 key="compose-smoke-$(date +%s)-$$-${RANDOM}"
@@ -27,14 +42,16 @@ code=$(request -o "$tmp/start" -w '%{http_code}' -X POST -H "Idempotency-Key: $k
 jq -e '.workflowId != "" and .runId != "" and (.planHash | test("^[a-f0-9]{64}$"))' "$tmp/start" >/dev/null
 id=$(jq -r .workflowId "$tmp/start")
 complete=false
-for ((i=0;i<wait_seconds;i++)); do
-  request --fail "$base/runs/$id" > "$tmp/result"
-  status=$(jq -r .status "$tmp/result")
-  if [[ $status == completed ]]; then complete=true; break; fi
-  if [[ $status != running ]]; then echo "FAIL: run ended with $status" >&2; exit 1; fi
-  sleep 1
+deadline=$((SECONDS + wait_seconds))
+while ((SECONDS < deadline)); do
+  if poll_request --fail "$base/runs/$id" > "$tmp/result"; then
+    status=$(jq -r .status "$tmp/result")
+    if [[ $status == completed ]]; then complete=true; break; fi
+    if [[ $status != running ]]; then fail "run ended with $status"; fi
+  fi
+  poll_pause
 done
-[[ $complete == true ]] || { echo 'FAIL: run did not complete' >&2; exit 1; }
+[[ $complete == true ]] || fail "run did not complete within ${wait_seconds}s"
 jq -e '.result == {"results":[{"workerName":"worker-a"},{"workerName":"worker-b"},{"workerName":"worker-c"},{"workerName":"worker-d"}]}' "$tmp/result" >/dev/null
 # Both source registry and durable result must agree on the selected plan.
 request --fail "$base/workers" > "$tmp/workers"

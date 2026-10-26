@@ -25,22 +25,35 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+const (
+	workerStarting uint32 = iota
+	workerPolling
+	workerStopped
+)
+
 type health struct {
-	polling atomic.Bool
-	check   func(context.Context) error
+	state atomic.Uint32
+	check func(context.Context) error
 }
 
 func (h *health) ready(ctx context.Context) error {
-	if !h.polling.Load() {
+	if h.state.Load() != workerPolling {
 		return errors.New("not polling")
 	}
-	return h.check(ctx)
+	if err := h.check(ctx); err != nil {
+		return err
+	}
+	// A fatal notification may have arrived while the health RPC was in flight.
+	if h.state.Load() != workerPolling {
+		return errors.New("worker stopped")
+	}
+	return nil
 }
 
 // guard rejects new runs before polling starts and as soon as shutdown begins.
 func (h *health) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/runs" && !h.polling.Load() {
+		if r.Method == http.MethodPost && r.URL.Path == "/runs" && h.state.Load() != workerPolling {
 			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
@@ -81,6 +94,15 @@ func retry(ctx context.Context, delay time.Duration, attempt func(context.Contex
 }
 
 func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.Logger) error {
+	return run(ctx, role, c, logger, client.DialContext, worker.New)
+}
+
+// Keep external SDK construction at the boundary so lifecycle tests exercise
+// the complete HTTP/start/stop path without a live Temporal server.
+func run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.Logger,
+	dial func(context.Context, client.Options) (client.Client, error),
+	newWorker func(client.Client, string, worker.Options) worker.Worker,
+) (result error) {
 	logger = logger.With("role", role, "worker", c.WorkerName, "taskQueue", c.TaskQueue, "namespace", c.TemporalNamespace)
 	var provider registry.Provider
 	var err error
@@ -92,7 +114,7 @@ func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 	}
 	h := &health{}
 	// Serve liveness throughout bounded startup; readiness cannot touch the client
-	// until polling.Store(true) publishes the fully initialized connection.
+	// until the starting->polling transition publishes the initialized connection.
 	srv := &http.Server{Addr: c.HTTPAddr, Handler: h.router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	// Publish the API handler exactly once after the client gateway exists.
 	// New starts get503 until polling begins; liveness is available throughout.
@@ -114,7 +136,7 @@ func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 		attempt, done := context.WithTimeout(ctx, 5*time.Second)
 		defer done()
 		var e error
-		temporal, e = client.DialContext(attempt, client.Options{HostPort: c.TemporalAddress, Namespace: c.TemporalNamespace, Logger: sdklog.NewStructuredLogger(logger)})
+		temporal, e = dial(attempt, client.Options{HostPort: c.TemporalAddress, Namespace: c.TemporalNamespace, Logger: sdklog.NewStructuredLogger(logger)})
 		if e != nil {
 			logger.Warn("Temporal connection unavailable; retrying")
 			return e
@@ -129,7 +151,19 @@ func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 		_, err := temporal.CheckHealth(ctx, &client.CheckHealthRequest{})
 		return err
 	}
-	poller := worker.New(temporal, c.TaskQueue, worker.Options{WorkerStopTimeout: 30 * time.Second})
+	fatal := make(chan error, 1)
+	poller := newWorker(temporal, c.TaskQueue, worker.Options{
+		WorkerStopTimeout: 30 * time.Second,
+		OnFatalError: func(err error) {
+			// SDK delivers this off-poller, then calls Stop after the hook returns.
+			// Never wait for cleanup here: notify the owning goroutine without blocking.
+			h.state.Store(workerStopped)
+			select {
+			case fatal <- err:
+			default:
+			}
+		},
+	})
 	if role == "orchestrator" {
 		poller.RegisterWorkflowWithOptions(parent.Parent, workflow.RegisterOptions{Name: contracts.ParentWorkflowName})
 		handler.Store(route{api.New(provider, runs.New(provider, runs.NewTemporal(temporal)), h.ready)})
@@ -137,19 +171,32 @@ func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 		poller.RegisterWorkflowWithOptions(child.Child, workflow.RegisterOptions{Name: contracts.ChildWorkflowName})
 		poller.RegisterActivityWithOptions(activities.New(c.WorkerName, c.ActivityDuration).Example, activity.RegisterOptions{Name: contracts.ExampleActivityName})
 	}
+	defer func() {
+		h.state.Store(workerStopped)
+		// SDK Stop is joinable, including when its own fatal handler owns cleanup.
+		poller.Stop()
+		// Preserve a delivered fatal cause if Start/HTTP/cancellation raced with it.
+		select {
+		case err := <-fatal:
+			result = err
+		default:
+		}
+	}()
 	if err := poller.Start(); err != nil {
 		return err
 	}
-	h.polling.Store(true)
-	defer poller.Stop()
-	logger.Info("polling started", "httpAddress", c.HTTPAddr)
+	// A fatal hook may run before Start returns. Stopped is terminal: never
+	// republish readiness/admission after that notification.
+	if h.state.CompareAndSwap(workerStarting, workerPolling) {
+		logger.Info("polling started", "httpAddress", c.HTTPAddr)
+	}
 	select {
+	case err := <-fatal:
+		return err
 	case <-ctx.Done():
-		h.polling.Store(false)
 		logger.Info("shutdown requested")
 		return nil
 	case err := <-httpErr:
-		h.polling.Store(false)
 		return err
 	}
 }

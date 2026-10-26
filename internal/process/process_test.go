@@ -39,9 +39,9 @@ func TestNoNewStartsBeforePollingOrDuringShutdown(t *testing.T) {
 	}
 	g.Expect(start()).To(gomega.Equal(503))
 	g.Expect(forwarded).To(gomega.Equal(0))
-	h.polling.Store(true)
+	h.state.Store(workerPolling)
 	g.Expect(start()).To(gomega.Equal(202))
-	h.polling.Store(false)
+	h.state.Store(workerStopped)
 	g.Expect(start()).To(gomega.Equal(503))
 	g.Expect(forwarded).To(gomega.Equal(1))
 }
@@ -66,12 +66,12 @@ func TestHealthSeparatesPollingAndConnectivityFromLiveness(t *testing.T) {
 	g.Expect(request("/readyz")).To(gomega.Equal(503))
 	connected = true
 	g.Expect(request("/readyz")).To(gomega.Equal(503))
-	h.polling.Store(true)
+	h.state.Store(workerPolling)
 	g.Expect(request("/readyz")).To(gomega.Equal(200))
 	connected = false
 	g.Expect(request("/readyz")).To(gomega.Equal(503))
 	g.Expect(request("/healthz")).To(gomega.Equal(200))
-	h.polling.Store(false)
+	h.state.Store(workerStopped)
 	connected = true
 	g.Expect(request("/readyz")).To(gomega.Equal(503))
 }

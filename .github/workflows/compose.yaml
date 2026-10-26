@@ -31,11 +31,4 @@ jobs:
         run: mise run compose:persistence
       - name: Always remove only this job's projects and volumes
         if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Handles even an interrupted fixture process; never prune global data.
-          while IFS= read -r project; do
-            COMPOSE_PROJECT_NAME="$project" RESET_CONFIRM=1 mise run compose:reset
-          done < <(docker compose ls --all --format json | jq -r --arg prefix "$COMPOSE_PROJECT_NAME-persistence-" '.[] | select(.Name | startswith($prefix)) | .Name')
-          RESET_CONFIRM=1 mise run compose:reset
+        run: mise run compose:cleanup
