@@ -21,4 +21,33 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
+bash scripts/compose.sh config
 '''
+
+[tasks."images:build"]
+description = "Build both app images with a clean Git SHA or unique dirty local tag"
+run = "bash scripts/compose.sh build"
+
+[tasks."compose:up"]
+description = "Build and start the PostgreSQL-backed local demo, waiting for readiness"
+run = "bash scripts/compose.sh up"
+
+[tasks."compose:smoke"]
+description = "Assert a real diamond, durable replay and zero-body HTTP contract"
+run = "bash scripts/compose-smoke.sh"
+
+[tasks."compose:persistence"]
+description = "Verify restarts, replacement, schema rerun and isolated destructive reset"
+run = "bash scripts/compose-persistence.sh"
+
+[tasks."compose:down"]
+description = "Stop this project, preserving its PostgreSQL history volume"
+run = "bash scripts/compose.sh down"
+
+[tasks."compose:reset"]
+description = "DESTRUCTIVE: remove this project's history (requires RESET_CONFIRM=1)"
+run = "bash scripts/compose.sh reset"
+
+[tasks."compose:config"]
+description = "Validate Compose configuration without rendering credentials"
+run = "bash scripts/compose.sh config"
