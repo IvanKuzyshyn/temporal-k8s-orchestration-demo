@@ -29,7 +29,9 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
-bash -n scripts/*.sh
+for script in scripts/*.sh; do
+  bash -n "$script"
+done
 mise run test:manifests
 mise run validate:manifests
 bash scripts/compose.sh config

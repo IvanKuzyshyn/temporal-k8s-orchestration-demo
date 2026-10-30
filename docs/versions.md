@@ -205,3 +205,10 @@ discovery is claimed. Linux amd64 CI is configured in `kind-integration.yaml`;
 **no Linux CI execution is claimed until controller observation**. Full tests,
 reset evidence and final cluster/tunnel status:
 `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-6-report.md`.
+
+Controller subsequently observed all three initial Linux jobs passing at
+`f315c5e76550956e9cc8770a2cd90a4ad9c4954e`: Validate **41064345519** (2m11s),
+Compose **41064345482** (6m23s), Kind **41064345647** (7m24s). These are
+controller-supplied observations, not independently retrieved logs here.
+Review-minor follow-ups require fresh controller CI observation; later scaling
+and Kyverno lifecycle gates remain unchanged.
