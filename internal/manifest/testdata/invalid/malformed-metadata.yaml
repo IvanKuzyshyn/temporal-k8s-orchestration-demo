@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: List
+items:
+  - kind: Namespace
+    metadata: {name: ns-a, labels: {temporal-demo.io/worker-namespace: "true"}}
+  - kind: Service
+    metadata: {name: [worker-a], namespace: ns-a, annotations: {temporal-worker: "true"}}

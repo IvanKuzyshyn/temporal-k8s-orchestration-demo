@@ -1,0 +1,64 @@
+# Services deliberately precede their Namespace declarations.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-d
+  namespace: temporal-demo-worker-d
+  uid: service-d-uid
+  annotations:
+    temporal-worker: "true"
+    temporal-worker-run-after: " worker-c, worker-b,worker-c "
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-b
+  namespace: temporal-demo-worker-b
+  annotations:
+    temporal-worker: "true"
+    temporal-worker-run-after: worker-a
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-a
+  namespace: temporal-demo-worker-a
+  annotations:
+    temporal-worker: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-c
+  namespace: temporal-demo-worker-c
+  annotations:
+    temporal-worker: "true"
+    temporal-worker-run-after: worker-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-worker-c
+  labels:
+    temporal-demo.io/worker-namespace: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-worker-a
+  labels:
+    temporal-demo.io/worker-namespace: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-worker-d
+  labels:
+    temporal-demo.io/worker-namespace: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-worker-b
+  labels:
+    temporal-demo.io/worker-namespace: "true"

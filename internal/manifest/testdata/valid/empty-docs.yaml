@@ -1,0 +1,12 @@
+---
+# empty document
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: temporal-demo-worker-a, labels: {temporal-demo.io/worker-namespace: "true"}}
+---
+---
+apiVersion: v1
+kind: Service
+metadata: {name: worker-a, namespace: temporal-demo-worker-a, annotations: {temporal-worker: "true"}}
+---

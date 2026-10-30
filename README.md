@@ -23,7 +23,7 @@ No SQLite, Temporal dev server, hosted Temporal, or auto-setup image is used.
 
 ```sh
 mise install
-mise run validate              # format, race tests, vet, credential-free Compose check
+mise run validate              # format, race tests, vet, manifest CLI, credential-free Compose check
 mise run compose:up            # builds BOTH app images, waits for all services
 mise run compose:smoke         # real diamond + completed/restarted keyed replay + body400
 mise run compose:persistence   # isolated restart/replacement/schema/down-up/reset proof
@@ -53,6 +53,30 @@ curl -fsS -X POST -H 'Idempotency-Key: my-demo-run' http://127.0.0.1:8080/runs
 Deduplication lasts within Temporal history retention (default namespace72h).
 Unexpected body bytes return400. Results contain only sorted `workerName` values;
 there is no business payload. See [API contract](docs/api.md).
+
+## Complete rendered worker graph validation
+
+```sh
+mise exec -- go run ./cmd/validate-graph < rendered.yaml
+mise run test:manifests         # extraction tests + real CLI fixture exit/output assertions
+```
+
+Provide the **complete** multi-document YAML/JSON deployment set, including
+Namespace declarations; Kubernetes `List` items (also nested Lists) are expanded.
+Namespaces labeled `temporal-demo.io/worker-namespace: "true"` select graph scope.
+Services registered with annotation `temporal-worker: "true"` require an explicit,
+declared namespace; registrations outside labeled namespaces are ignored. Queues
+and workflow types are derived from Service identity, and the unchanged
+`temporal-worker-run-after` annotation uses the shared dependency parser.
+
+The CLI prints only the canonical plan hash on success, or a diagnostic to stderr
+and exit1 on invalid input. Duplicate Namespace or Service definitions are
+ambiguous and rejected, even if identical or disabled. Shared graph validation
+rejects unknown/self/cyclic dependencies, globally duplicate worker identities
+and multiple workers in one namespace. This is **graph/source validation**, not a
+general Kubernetes/CRD schema check, admission test, or proof of runnable workers.
+No cluster or Docker runtime is needed. The public task is included additively in
+`mise run validate`, which the existing PR workflow already runs.
 
 ## Lifecycle, history and destructive reset
 
