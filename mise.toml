@@ -37,30 +37,34 @@ mise run validate:manifests
 bash scripts/compose.sh config
 '''
 
-[tasks."cluster:create"]
-run = "bash scripts/cluster-create.sh"
+[tasks."k8s:up"]
+description = "Create if absent and apply the complete fixed-replica kind demo; preserve history on rerun"
+run = "bash scripts/k8s-up.sh"
 
-[tasks."cluster:delete"]
-description = "DESTRUCTIVE: delete ONLY owned temporal-demo cluster and its PVC history"
-run = "bash scripts/cluster-delete.sh"
-
-[tasks."infra:install"]
-run = "bash scripts/infrastructure-install.sh"
-
-[tasks."images:load"]
-run = "bash scripts/images-load.sh"
-
-[tasks."apps:deploy-static"]
-run = "bash scripts/apps-deploy.sh"
+[tasks."k8s:down"]
+description = "DESTRUCTIVE: delete ONLY temporal-demo and ALL its PVC history"
+run = "bash scripts/k8s-down.sh"
 
 [tasks."validate:manifests"]
 run = "bash scripts/validate-manifests.sh"
 
 [tasks."api:forward"]
-run = "bash scripts/kind-forward.sh api"
+run = '''
+bash -euo pipefail -c '
+source scripts/kind-common.sh
+assert_context
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
+'
+'''
 
 [tasks."ui:forward"]
-run = "bash scripts/kind-forward.sh ui"
+run = '''
+bash -euo pipefail -c '
+source scripts/kind-common.sh
+assert_context
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal port-forward --address 127.0.0.1 service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
+'
+'''
 
 [tasks."test:kind-baseline"]
 run = "bash scripts/kind-integration.sh baseline"

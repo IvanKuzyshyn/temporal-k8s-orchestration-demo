@@ -32,7 +32,10 @@ type resource struct {
 		Template struct {
 			Spec struct {
 				TerminationGracePeriodSeconds int `yaml:"terminationGracePeriodSeconds"`
-				Containers                    []struct {
+				InitContainers                []struct {
+					Image string `yaml:"image"`
+				} `yaml:"initContainers"`
+				Containers []struct {
 					Name  string `yaml:"name"`
 					Image string `yaml:"image"`
 					Env   []struct {
@@ -50,7 +53,7 @@ type resource struct {
 
 func render(t *testing.T, extra ...string) ([]byte, error) {
 	t.Helper()
-	args := []string{"template", "temporal-demo", "../../k8s/apps", "-f", "../../k8s/apps/values-static.yaml", "--kube-version", "1.35.8", "--set", "images.tag=test-immutable"}
+	args := []string{"template", "temporal-demo", "../../k8s/worker-helm-chart", "-f", "../../k8s/worker-helm-chart/values-static.yaml", "--kube-version", "1.35.8", "--set", "images.tag=test-immutable"}
 	return exec.Command("helm", append(args, extra...)...).CombinedOutput()
 }
 

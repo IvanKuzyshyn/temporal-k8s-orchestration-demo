@@ -199,10 +199,9 @@ Kind is the authoritative integration environment. Start with one node, preload 
 ```text
 .github/workflows/       Go and manifest/policy validation
 k8s/
-  kind/                  Cluster configuration
-  infrastructure/        Temporal, KEDA, Kyverno configuration
+  infrastructure/        kind input; Temporal, KEDA and Kyverno plain manifests
   policies/              Registration generation and validation
-  apps/                  Orchestrator and worker resources
+  worker-helm-chart/     Orchestrator and worker Helm templates/values
 services/
   orchestrator/          chi API, registry adapters, parent workflow
   worker/                Worker process, child workflow, activity
@@ -223,7 +222,7 @@ go.mod
 go.sum
 ```
 
-Use mise tasks to create/delete the cluster, install infrastructure, build/load images, deploy applications, port-forward, run tests, and run the smoke scenario. Installation must wait for CRDs, controllers, admission webhooks, PostgreSQL readiness, default/visibility schema setup, and Temporal namespace readiness before applying dependent resources. Schema jobs must be repeatable, version-pinned, and complete before starting Temporal. Keep database credentials in local Secrets/environment files, not committed manifests.
+Use `mise run k8s:up` to create the named cluster if absent, apply per-component plain infrastructure YAML, build/load images, validate the exact application render and apply it. `mise run k8s:down` explicitly deletes the demo cluster and its history. Keep port-forward, validation and integration-test tasks independent; do not add granular provisioning wrappers. This layout/lifecycle supersedes the original fragmented Task 6 provisioning approach (approved PR8 simplification, 2026-10-30). Installation must wait for CRDs, controllers, admission webhooks, PostgreSQL readiness, default/visibility schema setup, and Temporal namespace readiness before applying dependent resources. Schema jobs must be repeatable, version-pinned, and complete before starting Temporal. Keep database credentials in local Secrets/environment files, not committed manifests.
 
 Document both a quick-start path and teardown. PostgreSQL volume/PVC storage preserves history across Temporal and database Pod/container replacement. Compose down preserves named volumes; explicit reset deletes them. Deleting the kind cluster deletes its local PVC data; this is not host-external backup. Verify persistence and document destructive operations. Keep secrets and local state out of Git. Restrict local endpoints to localhost; production authentication is not part of this demo.
 

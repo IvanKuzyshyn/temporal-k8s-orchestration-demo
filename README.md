@@ -67,39 +67,50 @@ From **this checkout**, with Docker running:
 ```sh
 mise install
 mise run validate:manifests     # no cluster: Helm lint/render, complete graph, strict schemas
-mise run cluster:create        # ONLY temporal-demo; context kind-temporal-demo
-mise run infra:install         # PostgreSQL/PVC -> matching schemas -> Temporal/default -> controllers
-mise run images:load            # builds BOTH immutable-tagged images and loads this cluster
-mise run apps:deploy-static     # full render validated BEFORE Helm deployment
+mise run k8s:up                # create if absent, apply infrastructure, build/load/validate/apply apps
 mise run test:kind-baseline     # diamond + Kubernetes-only orchestrator restart/keyed replay
 mise run test:kind-persistence  # replace Temporal/PG Pods + safe schema rerun, retain history
 mise run validate              # same cumulative command used by all PR workflows
 ```
 
-Run mutating tasks **sequentially**, especially `infra:install` and persistence:
+Run mutating tasks **sequentially**, especially `k8s:up` and persistence:
 they share the schema Job. Static workers remain at one replica. Namespace
 `temporal-demo-orchestrator` holds the API/parent poller. Each of `worker-a`
 through `worker-d` has its own `temporal-demo-worker-<letter>` namespace labeled
-`temporal-demo.io/worker-namespace: "true"`. Values in `k8s/apps/values.yaml`
+`temporal-demo.io/worker-namespace: "true"`. Values in `k8s/worker-helm-chart/values.yaml`
 define each identity/dependency once; Namespace names, Service annotations,
 Deployment queues and the static registry are generated together. No discovery
 RBAC, Kyverno policies/registrations or KEDA ScaledObjects are enabled. Temporal
 uses `temporal.temporal.svc.cluster.local:7233` across namespaces, namespace
 `default`, with separate PostgreSQL default and visibility databases.
 
-The kubeconfig and cluster UID are **ignored worktree-local** files
-`.local/kubeconfig` and `.local/kind-cluster-uid`. No `use-context` or global
+The kubeconfig is **ignored and worktree-local**: `.local/kubeconfig`.
+Every kubectl operation selects `kind-temporal-demo`; creation/deletion explicitly
+selects `temporal-demo` and the local kubeconfig. No `use-context` or global
 kubeconfig write occurs. Tasks reject a foreign `KUBECONFIG`; unset it first,
-or set it to this checkout's absolute `.local/kubeconfig`. Guards check the
-context, cluster, localhost API address, Docker node ownership and original
-cluster UID before each mutation/deletion. Do not copy ownership files between
-checkouts or manually adopt an unrelated cluster. If state is missing or wrong,
-commands fail closed; investigate rather than bypassing the checks. Manual reads:
+or set it to this checkout's absolute `.local/kubeconfig`. An existing cluster
+requires that file's current context to match. Do not copy kubeconfigs between
+checkouts or adopt another cluster. There is no UID/Docker-ownership framework.
+Manual reads:
 
 ```sh
 KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal-demo get pods -A
 mise run kind:diagnostics       # scoped status/warnings/app logs; no Secrets/infra logs
 ```
+
+Infrastructure is plain per-component YAML in `k8s/infrastructure/`:
+`kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
+PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
+`keda.yaml` and `kyverno.yaml` contain complete pinned controllers/CRDs/RBAC.
+`k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
+Temporal readiness → completed default-namespace bootstrap → UI; then controller
+CRDs (server-side apply), establishment and controllers/webhook CAs. Bootstrap
+Jobs are recreated on reruns, not databases/storage. Both images are built directly
+with Docker, tagged with the source revision (plus a unique dirty suffix), loaded
+into kind, and the **same rendered bytes** pass complete-graph/strict-schema
+validation before kubectl apply. Helm only renders; it no longer installs releases.
+See [render provenance and reproduction](k8s/infrastructure/README.md), including
+migration from the prior Helm-managed baseline and excluded Helm lifecycle hooks.
 
 Forwarding is localhost-only and distinct from Compose's occupied ports:
 
@@ -117,7 +128,7 @@ No manually running tunnel is required; no process is killed by name/pattern.
 
 ### kind persistence and deletion warning
 
-`infra:install` reruns reuse the existing **immutable**, cluster-owned
+`k8s:up` reruns reuse the existing **immutable**
 `temporal/postgres-credentials` Secret. The StatefulSet's `data-postgres-0` PVC
 must stay paired with that Secret. A retained PVC without its Secret fails closed
 instead of generating a new unusable password. Never delete/rotate that Secret
@@ -131,13 +142,15 @@ different Pod UIDs and unchanged PVC UID/bound volume plus Secret UID/version.
 This is local PVC persistence, **not host-external backup or production HA**.
 
 ```sh
-mise run cluster:delete         # DESTRUCTIVE: ONLY temporal-demo, including ALL its PVC history
-# To reset: delete, then repeat the quick start. Old histories will be gone.
+mise run k8s:down               # DESTRUCTIVE: ONLY temporal-demo, including ALL its PVC history
+# To reset deliberately: down, then k8s:up. Old histories will be gone.
 ```
 
-Deletion is explicit; integration tests leave the cluster and history available
-for inspection. The new PR kind job runs the same tasks and unconditionally
-attempts scoped cluster deletion. Existing Validate and Compose coverage remains.
+Deletion is explicit and idempotent; integration tests leave the cluster/history
+available for inspection. Only disposable Linux CI exercises down/down/up and
+checks old history returns404, followed by a fresh diamond. Local retained history
+is not reset. CI unconditionally attempts scoped deletion; Validate and Compose
+coverage remains.
 Darwin ARM64 Docker acceptance and Linux amd64 CI acceptance are separate gates;
 see [versions/evidence](docs/versions.md). Controller installation/readiness is
 **not** proof of KEDA no-poller scaling or Kyverno admission/registration cleanup.

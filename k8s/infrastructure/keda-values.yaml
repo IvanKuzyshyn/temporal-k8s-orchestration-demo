@@ -13,6 +13,24 @@ metricsServer:
 webhooks:
   replicaCount: 1
 resources:
-  operator: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: '1', memory: 256Mi}}
-  metricServer: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: '1', memory: 256Mi}}
-  webhooks: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+  operator:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  metricServer:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  webhooks:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi

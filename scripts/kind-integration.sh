@@ -18,7 +18,7 @@ stop_forward() {
 cleanup() {
   rc=$?
   stop_forward
-  if ((rc!=0)); then diagnostics || true; fi
+  if ((rc!=0)); then bash scripts/kind-diagnostics.sh || true; fi
   rm -rf "$fixture"
   exit "$rc"
 }
@@ -26,9 +26,8 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 start_forward() {
-  assert_context
   # Let kubectl bind an available local port atomically; no check-then-bind race.
-  kubectl --context "$CONTEXT" --request-timeout=15s -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator :8080 > "$fixture/forward.log" 2>&1 &
+  kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --request-timeout=15s -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator :8080 > "$fixture/forward.log" 2>&1 &
   forward_pid=$!
   local port=''
   for ((i=0;i<60;i++)); do
@@ -79,7 +78,9 @@ else
   k -n temporal wait --for=condition=Ready pod/postgres-0 --timeout=180s
   pg_after=$(k -n temporal get pod postgres-0 -o jsonpath='{.metadata.uid}')
   [[ -n $pg_after && $pg_before != "$pg_after" ]] || { echo 'PostgreSQL Pod was not replaced' >&2; exit 1; }
-  bash scripts/schema-rerun.sh
+  k -n temporal delete job temporal-schema --ignore-not-found --wait=true --timeout=60s
+  k apply -f k8s/infrastructure/temporal.yaml -l temporal-demo.io/phase=schema
+  k -n temporal wait --for=condition=complete job/temporal-schema --timeout=270s
   k -n temporal scale deployment/temporal --replicas=1
   k -n temporal rollout status deployment/temporal --timeout=180s
   temporal_after=$(k -n temporal get pods -l app=temporal -o jsonpath='{.items[0].metadata.uid}')

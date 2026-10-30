@@ -6,7 +6,7 @@ replicas: 1
 temporalAddress: temporal.temporal.svc.cluster.local:7233
 workers:
   - name: worker-a
-    runAfter: ''
+    runAfter: ""
   - name: worker-b
     runAfter: worker-a
   - name: worker-c

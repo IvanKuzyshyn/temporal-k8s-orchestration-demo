@@ -43,5 +43,57 @@ cmp .local/schema-source/clusterpolicy.json k8s/schemas/kyverno.io/clusterpolicy
 mise run validate:manifests
 ```
 
-When later tasks introduce additional CRD kinds, add schemas from their exact
-consumed release before accepting them. Do not weaken unknown-kind rejection.
+## CRD-definition schema (Kubernetes 1.35.8)
+
+The pinned core catalog omits **CustomResourceDefinition** itself. Complete
+vendored KEDA/Kyverno manifests therefore also use
+`apiextensions.k8s.io/customresourcedefinition_v1.json`, derived from the official
+Kubernetes **v1.35.8** Swagger model, not from an unrelated custom-kind catalog:
+
+- Source: `https://raw.githubusercontent.com/kubernetes/kubernetes/1c2e10a409eb1b03f2f28f401ce935312e20d9fb/api/openapi-spec/swagger.json`
+  (resolved v1.35.8 commit); SHA256
+  `483500149ee52ce5753d75f5639101d985bb4f5e902cc05b1ba7627465d62446`.
+- Root model: `io.k8s.apiextensions-apiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition`.
+  Its transitive referenced definitions are bundled unchanged; strict unknown-field
+  handling adds `additionalProperties: false` to typed object models with named
+  properties and no existing additionalProperties rule. Free-form maps and
+  explicit additionalProperties schemas retain their upstream semantics.
+- Serialized as sorted compact JSON plus newline, SHA256
+  `e06421829d052f8e57263f4d23e5cfbe9273871c02204bce973086d226cdc305`.
+
+For one-off reproduction, download/check the source into `.local/swagger.json`,
+then run this standard-library-only Python snippet (not a project dependency):
+
+```python
+import json
+models = json.load(open('.local/swagger.json'))['definitions']
+name = 'io.k8s.apiextensions-apiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition'
+refs = set()
+def collect(v):
+    if isinstance(v, dict):
+        if isinstance(v.get('$ref'), str):
+            ref = v['$ref'].removeprefix('#/definitions/')
+            if ref not in refs:
+                refs.add(ref)
+                collect(models[ref])
+        for child in v.values(): collect(child)
+    elif isinstance(v, list):
+        for child in v: collect(child)
+collect(models[name])
+schema = dict(models[name], definitions={r: models[r] for r in sorted(refs)})
+def strict(v):
+    if isinstance(v, dict):
+        if v.get('type') == 'object' and 'properties' in v and 'additionalProperties' not in v:
+            v['additionalProperties'] = False
+        for child in v.values(): strict(child)
+    elif isinstance(v, list):
+        for child in v: strict(child)
+strict(schema)
+with open('.local/customresourcedefinition_v1.json', 'w') as out:
+    out.write(json.dumps(schema, sort_keys=True, separators=(',', ':')) + '\n')
+```
+
+The real validator tests cover complete controller manifests and positive/negative
+CRD-definition field types as well as the existing ScaledObject/ClusterPolicy
+schemas. No kinds are skipped. When later tasks introduce additional CRD kinds,
+add schemas from their exact consumed release before accepting them.

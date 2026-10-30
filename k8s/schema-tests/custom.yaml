@@ -30,7 +30,8 @@ spec:
       match:
         any:
           - resources:
-              kinds: [Pod]
+              kinds:
+                - Pod
       validate:
         message: validation-only fixture
         pattern:

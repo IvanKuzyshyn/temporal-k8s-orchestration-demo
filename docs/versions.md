@@ -172,12 +172,15 @@ multi-platform digests unchanged; PostgreSQL plugin postgres12, schemas1.19/1.14
   KEDA `a7da56bf41a33dad9d2fc82a6fdecee552fff947d80bf1e1dbcf4db0f9e26dee`;
   Kyverno `f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e`.
   Sources: <https://kedacore.github.io/charts/index.yaml>,
-  <https://kyverno.github.io/kyverno/index.yaml>. Every install/rerun checks archive
-  bytes; included subcharts are covered by that same hash.
-- Controller images, including Kyverno init/migration/readiness hooks, use exact
-  release+multi-platform digests in their committed values. `docker buildx
-  imagetools inspect` confirmed Linux ARM64 and amd64 for every image. Full
-  authoritative pins are in `k8s/infrastructure/{keda,kyverno}-values.yaml`.
+  <https://kyverno.github.io/kyverno/index.yaml>. The original Helm install checked
+  archive bytes on each rerun; the simplified apply flow consumes committed
+  manifests rendered from those verified bytes, including bundled subcharts.
+- Controller images, including Kyverno init, use exact release+multi-platform
+  digests in the committed manifests and reproducibility values. `docker buildx
+  imagetools inspect` confirmed Linux ARM64 and amd64 for every consumed image.
+  Authoritative deployment pins are in `k8s/infrastructure/{keda,kyverno}.yaml`;
+  the corresponding values reproduce them. Helm lifecycle hooks are not deployed
+  by the simplified apply flow; see the infrastructure README.
 - kubeconform uses strict Kubernetes1.35.8 built-in schemas at immutable
   `yannh/kubernetes-json-schema` revision
   `47163ead3738a996c3e30be9691bb37b8071d9d3`. Required ScaledObject/ClusterPolicy
@@ -187,8 +190,9 @@ multi-platform digests unchanged; PostgreSQL plugin postgres12, schemas1.19/1.14
   fields and an unknown-kind fixture fail; no missing-schema skip is used.
   Validation-only custom fixtures are never deployed.
 
-Actual host commands: `mise run cluster:create`, `infra:install`, `images:load`,
-`apps:deploy-static`, `test:kind-baseline`, and sequential `test:kind-persistence`.
+Original host evidence used the granular provisioning tasks (now removed),
+`test:kind-baseline`, and sequential `test:kind-persistence`. Current provisioning
+is `mise run k8s:up`; the simplification evidence below supersedes those steps.
 The diamond completed across five application namespaces with sorted identity-only
 results, canonical hash and durable replay after Kubernetes orchestrator restart.
 Different Temporal/PostgreSQL Pod UIDs retained the same PVC UID/bound volume and
@@ -212,3 +216,37 @@ Compose **41064345482** (6m23s), Kind **41064345647** (7m24s). These are
 controller-supplied observations, not independently retrieved logs here.
 Review-minor follow-ups require fresh controller CI observation; later scaling
 and Kyverno lifecycle gates remain unchanged.
+
+## PR8 plain-manifest simplification (2026-10-30)
+
+Same Darwin ARM64 host, pinned tools/images/archives and existing dedicated
+`temporal-demo` cluster; no local down/recreation/reset. `mise run k8s:up` passed
+**twice sequentially**, adopting the prior same-version Helm resources with
+native apply. CRDs use SSA without force; ordinary controllers/apps use
+client-side apply. A server-side dry-run first exposed Helm/defaulted-field
+conflicts for ordinary resources; client-side apply avoids forcing ownership.
+First adoption emitted expected missing-last-applied notices. Existing Helm
+release records/completed hook Jobs remain inert, not uninstalled; do not run
+Helm lifecycle commands against these kubectl-managed resources.
+
+The subsequent `mise run test:kind-baseline` and `mise run test:kind-persistence`
+passed sequentially, including Pod replacement, schema1.19/1.14 and durable
+keyed replay. A **pre-conversion** completed workflow's full API result and keyed
+replay remained byte-identical afterward. PVC UID/bound volume, immutable Secret
+UID/resourceVersion, all existing unrelated Docker container IDs and global
+kubeconfig SHA256 were unchanged. All controllers/webhook CAs and bootstrap Jobs
+were ready/complete; no owned port-forward remained. Evidence artifacts and exact
+commands: `.superpowers/sdd/2026-10-30-pr8-simple-k8s/task-1-report.md`.
+
+Complete vendored controller YAML joins strict manifest validation. The pinned
+core catalog lacks the CRD-definition model; its standalone strict schema now
+comes from Kubernetes1.35.8's exact Swagger release commit (provenance and
+reproduction in `k8s/schemas/README.md`). Focused validation reports **130 valid,
+0 invalid/errors/skipped** and rejects unknown kinds. Helm's icon recommendation
+is informational; upstream Kyverno policy-API deprecation/schema warnings, if
+emitted by Kubernetes, are not suppressed. These do not prove scaling or policy
+lifecycle behavior.
+
+Disposable Linux CI is configured to run up twice, baseline/persistence, explicit
+down/down/up, old-history404 and a fresh diamond. **No latest-head Linux CI result
+is claimed here**; the controller observes that separate gate.

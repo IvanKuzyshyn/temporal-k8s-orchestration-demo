@@ -13,10 +13,10 @@ validate() {
 if (($#)); then validate "$@"; exit; fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-helm lint k8s/apps -f k8s/apps/values-static.yaml --strict
-helm template temporal-demo k8s/apps -f k8s/apps/values-static.yaml --kube-version 1.35.8 > "$tmp/apps.yaml"
+helm lint k8s/worker-helm-chart -f k8s/worker-helm-chart/values-static.yaml --strict
+helm template temporal-demo k8s/worker-helm-chart -f k8s/worker-helm-chart/values-static.yaml --kube-version 1.35.8 > "$tmp/apps.yaml"
 go run ./cmd/validate-graph < "$tmp/apps.yaml"
-validate "$tmp/apps.yaml" k8s/infrastructure/postgresql.yaml k8s/infrastructure/schema-job.yaml k8s/infrastructure/namespace-job.yaml k8s/infrastructure/temporal.yaml k8s/schema-tests/custom.yaml
+validate "$tmp/apps.yaml" k8s/infrastructure/temporal.yaml k8s/infrastructure/keda.yaml k8s/infrastructure/kyverno.yaml k8s/schema-tests/custom.yaml
 # Assert failure locally and in every CI consumer (never mask a validator failure).
 if validate k8s/schema-tests/unknown.yaml > "$tmp/unknown.log" 2>&1; then
   echo 'FAIL: strict schema validator accepted unknown kind' >&2; exit 1

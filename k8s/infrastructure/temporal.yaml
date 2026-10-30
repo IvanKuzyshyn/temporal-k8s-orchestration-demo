@@ -1,25 +1,336 @@
+# PostgreSQL, schema bootstrap, Temporal and UI. Phases are applied by k8s-up.sh.
+# ConfigMap inputs copied verbatim from deploy/temporal; regression-tested for parity.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal
+  labels:
+    temporal-demo.io/phase: namespace
+---
+apiVersion: v1
+data:
+  10-visibility.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # This runs only when PostgreSQL initializes a fresh volume. Schema changes are
+    # owned by the separate matching-version schema service, not by this init hook.
+    psql --username "$POSTGRES_USER" --dbname postgres -v ON_ERROR_STOP=1 <<'SQL'
+    CREATE DATABASE temporal_visibility OWNER temporal;
+    SQL
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: postgres
+---
+apiVersion: v1
+data:
+  namespace.sh: |
+    #!/bin/sh
+    set -euo pipefail
+    for i in $(seq 1 30); do
+      if temporal operator cluster health --command-timeout 2s --address temporal:7233 >/dev/null 2>&1; then break; fi
+      if [ "$i" = 30 ]; then echo 'Temporal health timed out' >&2; exit 1; fi
+      sleep 1
+    done
+    if ! temporal operator namespace describe --command-timeout 5s --address temporal:7233 --namespace default >/dev/null 2>&1; then
+      temporal operator namespace create --command-timeout 5s --address temporal:7233 --namespace default --retention 72h
+    fi
+    temporal operator namespace describe --command-timeout 5s --address temporal:7233 --namespace default >/dev/null
+    # Frontend persistence sees a freshly created namespace before matching's cache.
+    # Verify the actual polling destination recognizes it before releasing workers.
+    for i in $(seq 1 30); do
+      if temporal task-queue describe --command-timeout 2s --address temporal:7233 --namespace default --task-queue orchestrator.v1.temporal --task-queue-type workflow >/dev/null 2>&1; then exit 0; fi
+      if [ "$i" = 30 ]; then echo 'Namespace matching readiness timed out' >&2; exit 1; fi
+      sleep 1
+    done
+  schema.sh: |
+    #!/bin/sh
+    set -euo pipefail
+    for store in temporal visibility; do
+      if [ "$store" = temporal ]; then export SQL_DATABASE=temporal; else export SQL_DATABASE=temporal_visibility; fi
+      # Setup does not overwrite an existing version table; update applies only
+      # migrations newer than the stored version. Never use overwrite/drop here.
+      timeout 90 temporal-sql-tool setup-schema -v 0.0
+      timeout 90 temporal-sql-tool update-schema -d "/etc/temporal/schema/postgresql/v12/$store/versioned"
+    done
+kind: ConfigMap
+metadata:
+  name: temporal-scripts
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: postgres
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    # enable-template
+    # Rendered in memory by Temporal1.32's native loader; never commit rendered secrets.
+    log:
+      stdout: true
+      level: info
+    persistence:
+      defaultStore: default
+      visibilityStore: visibility
+      numHistoryShards: 4
+      datastores:
+        default:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal
+            connectAddr: postgres:5432
+            connectProtocol: tcp
+            user: temporal
+            password: {{ env "POSTGRES_PASSWORD" | quote }}
+            maxConns: 10
+            maxIdleConns: 10
+            maxConnLifetime: 1h
+        visibility:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal_visibility
+            connectAddr: postgres:5432
+            connectProtocol: tcp
+            user: temporal
+            password: {{ env "POSTGRES_PASSWORD" | quote }}
+            maxConns: 5
+            maxIdleConns: 5
+            maxConnLifetime: 1h
+    global:
+      membership:
+        maxJoinDuration: 30s
+        broadcastAddress: {{ env "BIND_ON_IP" | quote }}
+    services:
+      frontend:
+        rpc:
+          grpcPort: 7233
+          membershipPort: 6933
+          bindOnIP: 0.0.0.0
+      matching:
+        rpc:
+          grpcPort: 7235
+          membershipPort: 6935
+          bindOnIP: 0.0.0.0
+      history:
+        rpc:
+          grpcPort: 7234
+          membershipPort: 6934
+          bindOnIP: 0.0.0.0
+      worker:
+        rpc:
+          grpcPort: 7239
+          membershipPort: 6939
+          bindOnIP: 0.0.0.0
+    clusterMetadata:
+      enableGlobalNamespace: false
+      failoverVersionIncrement: 10
+      masterClusterName: active
+      currentClusterName: active
+      clusterInformation:
+        active:
+          enabled: true
+          initialFailoverVersion: 1
+          rpcName: frontend
+          rpcAddress: temporal:7233
+    dcRedirectionPolicy:
+      policy: noop
+    archival:
+      history:
+        state: disabled
+      visibility:
+        state: disabled
+kind: ConfigMap
+metadata:
+  name: temporal-config
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: postgres
+          image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+          env:
+            - name: POSTGRES_USER
+              value: temporal
+            - name: POSTGRES_DB
+              value: temporal
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - temporal
+                - -d
+                - temporal
+            periodSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - temporal
+                - -d
+                - temporal
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-schema
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: schema
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 240
+  template:
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+          command:
+            - /bin/sh
+            - /scripts/schema.sh
+          env:
+            - name: SQL_HOST
+              value: postgres
+            - name: SQL_PORT
+              value: "5432"
+            - name: SQL_USER
+              value: temporal
+            - name: SQL_PLUGIN
+              value: postgres12
+            - name: SQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: "1"
+              memory: 128Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: temporal-scripts
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: temporal
   namespace: temporal
+  labels:
+    temporal-demo.io/phase: server
 spec:
-  selector: {app: temporal}
-  ports: [{name: grpc, port: 7233, targetPort: 7233}]
+  selector:
+    app: temporal
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: temporal
   namespace: temporal
+  labels:
+    temporal-demo.io/phase: server
 spec:
   replicas: 1
-  strategy: {type: Recreate}
+  strategy:
+    type: Recreate
   selector:
-    matchLabels: {app: temporal}
+    matchLabels:
+      app: temporal
   template:
     metadata:
-      labels: {app: temporal}
+      labels:
+        app: temporal
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
@@ -28,40 +339,78 @@ spec:
         - name: temporal
           image: temporalio/server:1.32.0@sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae
           env:
-            - {name: TEMPORAL_SERVER_CONFIG_FILE_PATH, value: /etc/temporal/demo/config.yaml}
-            - {name: TEMPORAL_ALLOW_NO_AUTH, value: 'true'}
+            - name: TEMPORAL_SERVER_CONFIG_FILE_PATH
+              value: /etc/temporal/demo/config.yaml
+            - name: TEMPORAL_ALLOW_NO_AUTH
+              value: "true"
             - name: BIND_ON_IP
-              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: POSTGRES_PASSWORD
-              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
-          ports: [{name: grpc, containerPort: 7233}]
-          readinessProbe: {tcpSocket: {port: grpc}, periodSeconds: 3}
-          livenessProbe: {tcpSocket: {port: grpc}, initialDelaySeconds: 60, periodSeconds: 10}
-          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: '2', memory: 768Mi}}
-          volumeMounts: [{name: config, mountPath: /etc/temporal/demo, readOnly: true}]
-      volumes: [{name: config, configMap: {name: temporal-config}}]
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+          ports:
+            - name: grpc
+              containerPort: 7233
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 768Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/temporal/demo
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: temporal-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: temporal-ui
   namespace: temporal
+  labels:
+    temporal-demo.io/phase: ui
 spec:
-  selector: {app: temporal-ui}
-  ports: [{name: http, port: 8080, targetPort: 8080}]
+  selector:
+    app: temporal-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: temporal-ui
   namespace: temporal
+  labels:
+    temporal-demo.io/phase: ui
 spec:
   replicas: 1
   selector:
-    matchLabels: {app: temporal-ui}
+    matchLabels:
+      app: temporal-ui
   template:
     metadata:
-      labels: {app: temporal-ui}
+      labels:
+        app: temporal-ui
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
@@ -69,7 +418,57 @@ spec:
         - name: ui
           image: temporalio/ui:2.48.0@sha256:5bc8712de27029b64a9cad156221b082a43ae27bfb108fc1743076eaabf1437f
           env:
-            - {name: TEMPORAL_ADDRESS, value: temporal.temporal.svc.cluster.local:7233}
-          ports: [{name: http, containerPort: 8080}]
-          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 5}
-          resources: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+            - name: TEMPORAL_ADDRESS
+              value: temporal.temporal.svc.cluster.local:7233
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-namespace
+  namespace: temporal
+  labels:
+    temporal-demo.io/phase: namespace-job
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+          command:
+            - /bin/sh
+            - /scripts/namespace.sh
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: "1"
+              memory: 128Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: temporal-scripts
