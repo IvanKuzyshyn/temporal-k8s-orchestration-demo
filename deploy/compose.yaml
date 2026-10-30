@@ -1,0 +1,157 @@
+name: temporal-demo
+
+x-app: &app
+  init: true
+  stop_grace_period: 40s
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  depends_on:
+    namespace-bootstrap:
+      condition: service_completed_successfully
+  healthcheck:
+    test: [CMD, /app/healthcheck, 'http://127.0.0.1:8081/readyz']
+    interval: 3s
+    timeout: 3s
+    retries: 60
+    start_period: 5s
+
+x-worker-env: &worker-env
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: default
+  HTTP_ADDR: ':8081'
+  ACTIVITY_DURATION: 5s
+
+services:
+  postgres:
+    image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_DB: temporal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-config-validation-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./temporal/init-db.sh:/docker-entrypoint-initdb.d/10-visibility.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U temporal -d temporal']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  schema:
+    image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+    entrypoint: [/bin/sh, /scripts/schema.sh]
+    environment:
+      SQL_HOST: postgres
+      SQL_PORT: '5432'
+      SQL_USER: temporal
+      SQL_PASSWORD: ${POSTGRES_PASSWORD:-config-validation-only}
+      SQL_PLUGIN: postgres12
+    volumes:
+      - ./temporal/schema.sh:/scripts/schema.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  temporal:
+    image: temporalio/server:1.32.0@sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae
+    environment:
+      TEMPORAL_SERVER_CONFIG_FILE_PATH: /etc/temporal/demo/config.yaml
+      TEMPORAL_ALLOW_NO_AUTH: 'true'
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-config-validation-only}
+    volumes:
+      - ./temporal/config.yaml:/etc/temporal/demo/config.yaml:ro
+    ports:
+      - '127.0.0.1:${COMPOSE_TEMPORAL_PORT:-7233}:7233'
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD-SHELL, 'nc -z 127.0.0.1 7233']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    stop_grace_period: 30s
+
+  namespace-bootstrap:
+    image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+    entrypoint: [/bin/sh, /scripts/namespace.sh]
+    volumes:
+      - ./temporal/namespace.sh:/scripts/namespace.sh:ro
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  ui:
+    image: temporalio/ui:2.48.0@sha256:5bc8712de27029b64a9cad156221b082a43ae27bfb108fc1743076eaabf1437f
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:8080
+    ports:
+      - '127.0.0.1:${COMPOSE_UI_PORT:-8088}:8080'
+    depends_on:
+      namespace-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q --spider http://127.0.0.1:8080/']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  orchestrator:
+    <<: *app
+    image: temporal-demo/orchestrator:${APP_IMAGE_TAG:-config-validation-only}
+    build:
+      context: ..
+      dockerfile: deploy/orchestrator.Dockerfile
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      REGISTRY_MODE: static
+      REGISTRY_FILE: deploy/config/workers.json
+      TASK_QUEUE: orchestrator.v1.temporal
+      HTTP_ADDR: ':8080'
+    ports:
+      - '127.0.0.1:${COMPOSE_API_PORT:-8080}:8080'
+    healthcheck:
+      test: [CMD, /app/healthcheck, 'http://127.0.0.1:8080/readyz']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  worker-a:
+    <<: *app
+    image: temporal-demo/worker:${APP_IMAGE_TAG:-config-validation-only}
+    build:
+      context: ..
+      dockerfile: deploy/worker.Dockerfile
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-a
+      TASK_QUEUE: worker-a.v1.temporal
+  worker-b:
+    <<: *app
+    image: temporal-demo/worker:${APP_IMAGE_TAG:-config-validation-only}
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-b
+      TASK_QUEUE: worker-b.v1.temporal
+  worker-c:
+    <<: *app
+    image: temporal-demo/worker:${APP_IMAGE_TAG:-config-validation-only}
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-c
+      TASK_QUEUE: worker-c.v1.temporal
+  worker-d:
+    <<: *app
+    image: temporal-demo/worker:${APP_IMAGE_TAG:-config-validation-only}
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-d
+      TASK_QUEUE: worker-d.v1.temporal
+
+volumes:
+  postgres-data:

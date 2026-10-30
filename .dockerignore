@@ -1,0 +1,13 @@
+*
+!go.mod
+!go.sum
+!internal/
+!internal/**
+!services/
+!services/**
+!cmd/
+!cmd/**
+!deploy/
+!deploy/config/
+!deploy/config/workers.json
+!deploy/*.Dockerfile
