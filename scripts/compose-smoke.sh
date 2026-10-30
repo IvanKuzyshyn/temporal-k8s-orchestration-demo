@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-base="${COMPOSE_API_URL:-http://127.0.0.1:8080}"
+base="${API_URL:-${COMPOSE_API_URL:-http://127.0.0.1:8080}}"
+runtime="${SMOKE_RUNTIME:-compose}"
+[[ $runtime == compose || $runtime == kind ]] || { echo 'Unknown smoke runtime' >&2; exit 1; }
+if [[ $runtime == kind && ${SMOKE_RESTART:-0} != 0 ]]; then
+  echo 'Kind orchestrator restarts belong to the owned integration driver' >&2; exit 1
+fi
 wait_seconds="${SMOKE_WAIT_SECONDS:-180}"
 tmp=$(mktemp -d)
 cleanup() {
   rc=$?
-  if ((rc!=0)); then bash scripts/compose.sh diagnostics; fi
+  if ((rc!=0)); then
+    if [[ $runtime == kind ]]; then bash scripts/kind-diagnostics.sh || true; else bash scripts/compose.sh diagnostics || true; fi
+  fi
   rm -rf "$tmp"
   exit "$rc"
 }
@@ -36,7 +43,7 @@ while ((SECONDS < deadline)); do
   poll_pause
 done
 if [[ $ready != true ]]; then echo "FAIL: API readiness did not succeed within ${wait_seconds}s" >&2; exit 1; fi
-key="compose-smoke-$(date +%s)-$$-${RANDOM}"
+key="${SMOKE_KEY:-smoke-$(date +%s)-$$-${RANDOM}}"
 code=$(request -o "$tmp/start" -w '%{http_code}' -X POST -H "Idempotency-Key: $key" "$base/runs")
 [[ $code == 202 ]] || fail "start returned $code, expected202"
 jq -e '.workflowId != "" and .runId != "" and (.planHash | test("^[a-f0-9]{64}$"))' "$tmp/start" >/dev/null
@@ -63,7 +70,7 @@ replay() {
   cmp "$tmp/result" "$tmp/replay"
 }
 replay
-if [[ ${SMOKE_RESTART:-1} == 1 ]]; then
+if [[ $runtime == compose && ${SMOKE_RESTART:-1} == 1 ]]; then
   bash scripts/compose.sh restart-app
   # Docker can reassign an ephemeral published port when restarting a container.
   base="http://$(bash scripts/compose.sh api-address)"

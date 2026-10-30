@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-namespace
+  namespace: temporal
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+          command: [/bin/sh, /scripts/namespace.sh]
+          resources: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: '1', memory: 128Mi}}
+          volumeMounts: [{name: scripts, mountPath: /scripts, readOnly: true}]
+      volumes: [{name: scripts, configMap: {name: temporal-scripts}}]

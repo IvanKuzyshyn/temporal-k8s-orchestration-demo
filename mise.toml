@@ -2,6 +2,10 @@ min_version = "2026.10.17"
 
 [tools]
 go = "1.27.3"
+kind = "0.33.0"
+helm = "4.3.1"
+kubectl = "1.35.8"
+"aqua:yannh/kubeconform" = "0.8.0"
 
 [env]
 GOTOOLCHAIN = "local"
@@ -15,7 +19,7 @@ description = "Test complete rendered graph extraction and real CLI fixture exit
 run = "go test -race ./internal/manifest ./cmd/validate-graph"
 
 [tasks.validate]
-description = "Check formatting, all tests/race, vet, manifests and Compose config (same command in CI)"
+description = "Check Go/race/vet, Helm/full graph/strict schemas and Compose config (same command in CI)"
 run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
@@ -25,9 +29,45 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
+bash -n scripts/*.sh
 mise run test:manifests
+mise run validate:manifests
 bash scripts/compose.sh config
 '''
+
+[tasks."cluster:create"]
+run = "bash scripts/cluster-create.sh"
+
+[tasks."cluster:delete"]
+description = "DESTRUCTIVE: delete ONLY owned temporal-demo cluster and its PVC history"
+run = "bash scripts/cluster-delete.sh"
+
+[tasks."infra:install"]
+run = "bash scripts/infrastructure-install.sh"
+
+[tasks."images:load"]
+run = "bash scripts/images-load.sh"
+
+[tasks."apps:deploy-static"]
+run = "bash scripts/apps-deploy.sh"
+
+[tasks."validate:manifests"]
+run = "bash scripts/validate-manifests.sh"
+
+[tasks."api:forward"]
+run = "bash scripts/kind-forward.sh api"
+
+[tasks."ui:forward"]
+run = "bash scripts/kind-forward.sh ui"
+
+[tasks."test:kind-baseline"]
+run = "bash scripts/kind-integration.sh baseline"
+
+[tasks."test:kind-persistence"]
+run = "bash scripts/kind-integration.sh persistence"
+
+[tasks."kind:diagnostics"]
+run = "bash scripts/kind-diagnostics.sh"
 
 [tasks."images:build"]
 description = "Build both app images with a clean Git SHA or unique dirty local tag"

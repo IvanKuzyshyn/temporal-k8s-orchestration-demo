@@ -1,10 +1,10 @@
 name: Setup mise
-description: Install pinned mise and Go for repository workflows
+description: Install pinned mise and all consumed Go/kind/Helm/schema tools
 runs:
   using: composite
   steps:
     - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
       with:
         version: 2026.10.17
-        install_args: go
+        install_args: go kind helm kubectl aqua:yannh/kubeconform
         cache: false

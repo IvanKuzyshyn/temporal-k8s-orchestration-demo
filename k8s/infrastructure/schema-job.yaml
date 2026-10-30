@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-schema
+  namespace: temporal
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 240
+  template:
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+          command: [/bin/sh, /scripts/schema.sh]
+          env:
+            - {name: SQL_HOST, value: postgres}
+            - {name: SQL_PORT, value: '5432'}
+            - {name: SQL_USER, value: temporal}
+            - {name: SQL_PLUGIN, value: postgres12}
+            - name: SQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+          resources: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: '1', memory: 128Mi}}
+          volumeMounts: [{name: scripts, mountPath: /scripts, readOnly: true}]
+      volumes: [{name: scripts, configMap: {name: temporal-scripts}}]

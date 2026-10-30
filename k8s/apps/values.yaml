@@ -1,0 +1,15 @@
+images:
+  orchestrator: temporal-demo/orchestrator
+  worker: temporal-demo/worker
+  tag: render-only
+replicas: 1
+temporalAddress: temporal.temporal.svc.cluster.local:7233
+workers:
+  - name: worker-a
+    runAfter: ''
+  - name: worker-b
+    runAfter: worker-a
+  - name: worker-c
+    runAfter: worker-a
+  - name: worker-d
+    runAfter: worker-b,worker-c
