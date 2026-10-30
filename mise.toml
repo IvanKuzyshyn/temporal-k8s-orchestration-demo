@@ -10,8 +10,12 @@ GOTOOLCHAIN = "local"
 description = "Run all Go tests with the race detector"
 run = "go test -race ./..."
 
+[tasks."test:manifests"]
+description = "Test complete rendered graph extraction and real CLI fixture exit/output contracts"
+run = "go test -race ./internal/manifest ./cmd/validate-graph"
+
 [tasks.validate]
-description = "Check formatting, all tests/race, and vet (same command in CI)"
+description = "Check formatting, all tests/race, vet, manifests and Compose config (same command in CI)"
 run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
@@ -21,6 +25,7 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
+mise run test:manifests
 bash scripts/compose.sh config
 '''
 

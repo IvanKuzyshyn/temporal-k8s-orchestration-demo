@@ -40,6 +40,27 @@ Task 3 checked release metadata on **2026-10-25 UTC** before installation:
 - Host HTTP/service/SDK-adapter tests and orchestrator race tests pass without a live Temporal server. The adapter tests assert actual outgoing SDK options, including parent queue/type, 30-minute execution timeout, nil retry policy, reject-duplicate ID reuse, conflict-fail policy, immutable input, and (at the initial Task 3 revision) distinct request/plan Memo hashes. The approved payload-removal follow-up replaced this with **planHash-only Memo** and key-only duplicate identity; current code/tests have no request hash or business payload. Durable lookup/Memo decoding, completed-run retrieval, unfinished nonblocking retrieval and error mapping are exercised through narrow SDK-client fakes, not a giant `client.Client` fake.
 - Exact RED/GREEN, focused/race and full uncached `mise run validate` evidence is recorded in `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-3-report.md`. Existing cumulative CI discovers the new packages automatically; **Linux CI acceptance remains pending controller observation**. No live server, cluster, persistence experiment or infrastructure gate is claimed by these unit tests.
 
+## Consumed manifest decoder selection and host evidence
+
+Task 5 checked upstream metadata before consuming the already-pinned
+**go.yaml.in/yaml/v3 v3.0.4** (no version upgrade):
+
+- `https://proxy.golang.org/go.yaml.in/yaml/v3/@v/v3.0.4.info` identifies release
+  timestamp `2025-06-29T14:09:51Z`, tag commit
+  `c3552c15f996075a7634df5159d9161c67bf3d76` from `github.com/yaml/go-yaml`.
+- The proxy `.mod` and [tagged go.mod](https://github.com/yaml/go-yaml/blob/v3.0.4/go.mod)
+  both declare **Go 1.16**, satisfied by `mise exec -- go version`:
+  **go1.27.3 darwin/arm64**.
+- The [tagged README](https://github.com/yaml/go-yaml/blob/v3.0.4/README.md)
+  identifies the official YAML organization's maintained continuation of go-yaml
+  and documents the `go.yaml.in/yaml/v3` import path. Product code uses its released
+  multi-document decoder, not a hand-written YAML parser. The exact dependency
+  moves from indirect to direct in `go.mod`; no unrelated upgrades are needed.
+- Manifest/real-CLI fixtures run locally without a cluster. Exact RED/GREEN, race,
+  CLI exit and full validation evidence is recorded in
+  `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-5-report.md`.
+  Linux PR CI remains controller-observed; no Kubernetes runtime acceptance is claimed.
+
 ## Infrastructure selections (Compose consumed in Task 4; later tasks unverified)
 
 - Temporal server **1.32.0**, schema/admin tooling **1.32.0** from the same release, chart **1.7.0** (its appVersion is 1.32.0). Release: <https://github.com/temporalio/temporal/releases/tag/v1.32.0>; published chart index: <https://go.temporal.io/helm-charts/index.yaml>. Schema source: <https://github.com/temporalio/temporal/tree/v1.32.0/schema/postgresql/v12>. Use `postgres12` for default and visibility stores, separate databases `temporal` and `temporal_visibility`; schema setup/migration must precede server startup. Pin image digests and verify schema-tool packaging in the consuming infrastructure task.

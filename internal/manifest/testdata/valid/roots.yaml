@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: temporal-demo-worker-a, labels: {temporal-demo.io/worker-namespace: "true"}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: temporal-demo-worker-b, labels: {temporal-demo.io/worker-namespace: "true"}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: worker-a, namespace: temporal-demo-worker-a, annotations: {temporal-worker: "true"}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: worker-b, namespace: temporal-demo-worker-b, annotations: {temporal-worker: "true", temporal-worker-run-after: " \t\n"}}
