@@ -40,7 +40,7 @@ func TestKyvernoRenderFailures(t *testing.T) {
 				}
 				g.Expect(err).NotTo(gomega.HaveOccurred())
 				g.Expect(os.WriteFile(filepath.Join(cache, "kyverno-3.9.2.tgz"), b, 0600)).To(gomega.Succeed())
-				g.Expect(os.WriteFile(filepath.Join(tools, "helm"), []byte("#!/bin/sh\nexit 43\n"), 0755)).To(gomega.Succeed())
+				g.Expect(os.WriteFile(filepath.Join(tools, "helm"), []byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: partial-render\\n'\nexit 43\n"), 0755)).To(gomega.Succeed())
 			}
 			cmd := exec.Command("bash", filepath.Join(repo, "scripts/render-kyverno.sh"))
 			cmd.Dir = root
