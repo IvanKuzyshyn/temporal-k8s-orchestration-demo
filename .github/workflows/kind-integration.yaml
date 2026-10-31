@@ -22,6 +22,7 @@ jobs:
       - run: mise run k8s:up
       - run: mise run k8s:up
       - name: Baseline and retained-history identity
+        shell: bash
         run: |
           mise run test:kind-baseline | tee .local/ci-baseline.log
           grep -F '{"workflowId":' .local/ci-baseline.log > .local/history-before-reset.json
