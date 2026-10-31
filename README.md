@@ -3,14 +3,18 @@
 Go + Temporal dependency-aware workflows: `worker-a → worker-b/worker-c → worker-d`.
 A body-free HTTP request snapshots a validated static graph; each worker returns
 only its identity. Compose runs four always-on workers; **it does not emulate
-KEDA or Kyverno**. Kubernetes discovery/scaling are later stages.
+KEDA or Kyverno**. The kind baseline runs the same static graph across five
+application namespaces. Controllers are installed, but discovery, policies and
+zero-to-one scaling remain later stages.
 
 ## Prerequisites
 
 - Docker Engine/Desktop with Compose v2+ (`--wait`, health/dependency conditions),
   Linux containers, roughly 8 GB available memory and 4+ CPUs recommended.
 - [mise](https://mise.jdx.dev/), Git, Bash, curl, jq and OpenSSL on the host.
-- `mise install` installs pinned Go1.27.3. Race tests need a C compiler
+- `mise install` installs pinned Go1.27.3, kind0.33.0, kubectl1.35.8,
+  Helm4.3.1 and kubeconform0.8.0, without changing global tool configuration.
+  Race tests need a C compiler
   (Xcode command-line tools on macOS; GCC on Linux).
 
 Images are pinned by release **and multi-platform digest**. Go build/runtime,
@@ -23,7 +27,7 @@ No SQLite, Temporal dev server, hosted Temporal, or auto-setup image is used.
 
 ```sh
 mise install
-mise run validate              # format, race tests, vet, manifest CLI, credential-free Compose check
+mise run validate              # Go/race/vet, Helm, full graph, strict schemas, Compose config
 mise run compose:up            # builds BOTH app images, waits for all services
 mise run compose:smoke         # real diamond + completed/restarted keyed replay + body400
 mise run compose:persistence   # isolated restart/replacement/schema/down-up/reset proof
@@ -54,6 +58,107 @@ Deduplication lasts within Temporal history retention (default namespace72h).
 Unexpected body bytes return400. Results contain only sorted `workerName` values;
 there is no business payload. See [API contract](docs/api.md).
 
+## Isolated kind baseline quick start
+
+Leave an existing Compose stack or unrelated kind cluster running; these tasks
+never invoke Compose up/down/reset or change global Kubernetes/Docker contexts.
+From **this checkout**, with Docker running:
+
+```sh
+mise install
+mise run validate:manifests     # no cluster: Helm lint/render, complete graph, strict schemas
+mise run k8s:up                # create if absent, apply infrastructure, build/load/validate/apply apps
+mise run test:kind-baseline     # diamond + Kubernetes-only orchestrator restart/keyed replay
+mise run test:kind-persistence  # replace Temporal/PG Pods + safe schema rerun, retain history
+mise run validate              # same cumulative command used by all PR workflows
+```
+
+Run mutating tasks **sequentially**, especially `k8s:up` and persistence:
+they share the schema Job. Static workers remain at one replica. Namespace
+`temporal-demo-orchestrator` holds the API/parent poller. Each of `worker-a`
+through `worker-d` has its own `temporal-demo-worker-<letter>` namespace labeled
+`temporal-demo.io/worker-namespace: "true"`. Values in `k8s/worker-helm-chart/values.yaml`
+define each identity/dependency once; Namespace names, Service annotations,
+Deployment queues and the static registry are generated together. No discovery
+RBAC, Kyverno policies/registrations or KEDA ScaledObjects are enabled. Temporal
+uses `temporal.temporal.svc.cluster.local:7233` across namespaces, namespace
+`default`, with separate PostgreSQL default and visibility databases.
+
+The kubeconfig is **ignored and worktree-local**: `.local/kubeconfig`.
+Every kubectl operation selects `kind-temporal-demo`; creation/deletion explicitly
+selects `temporal-demo` and the local kubeconfig. No `use-context` or global
+kubeconfig write occurs. Tasks reject a foreign `KUBECONFIG`; unset it first,
+or set it to this checkout's absolute `.local/kubeconfig`. An existing cluster
+requires that file's current context to match. Do not copy kubeconfigs between
+checkouts or adopt another cluster. There is no UID/Docker-ownership framework.
+Manual reads:
+
+```sh
+KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal-demo get pods -A
+mise run kind:diagnostics       # scoped status/app logs; failure-only credential-redacted schema evidence
+```
+
+Infrastructure inputs live in `k8s/infrastructure/`:
+`kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
+PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
+`keda.yaml` contains complete pinned controllers/CRDs/RBAC. Kyverno's pinned
+chart is downloaded only on cache miss, SHA256-verified on **every** use, then
+rendered with `kyverno-values.yaml` and strictly validated before applying the
+same temporary manifest. Cold archive/schema caches require network access;
+ordinary validation needs no live cluster.
+`k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
+Temporal readiness → completed default-namespace bootstrap → UI; then controller
+CRDs (server-side apply), establishment and controllers/webhook CAs. Bootstrap
+Jobs are recreated on reruns, not databases/storage. Both images are built directly
+with Docker, tagged with the source revision (plus a unique dirty suffix), loaded
+into kind, and the **same rendered bytes** pass complete-graph/strict-schema
+validation before kubectl apply. Helm only renders; it no longer installs releases.
+See [render provenance and reproduction](k8s/infrastructure/README.md), including
+migration from the prior Helm-managed baseline and excluded Helm lifecycle hooks.
+
+Forwarding is localhost-only and distinct from Compose's occupied ports:
+
+```sh
+mise run api:forward            # foreground, http://127.0.0.1:18080; Ctrl-C stops only this tunnel
+mise run ui:forward             # separate terminal, http://127.0.0.1:18088
+# API_FORWARD_PORT=19080 mise run api:forward  # override when needed
+# UI_FORWARD_PORT=19088 mise run ui:forward
+curl -fsS -X POST -H 'Idempotency-Key: kind-demo' http://127.0.0.1:18080/runs
+```
+
+Integration tasks allocate their own available localhost API port atomically and
+clean up their exact child PID and temporary files on success/failure/signals.
+No manually running tunnel is required; no process is killed by name/pattern.
+
+### kind persistence and deletion warning
+
+`k8s:up` reruns reuse the existing **immutable**
+`temporal/postgres-credentials` Secret. The StatefulSet's `data-postgres-0` PVC
+must stay paired with that Secret. A retained PVC without its Secret fails closed
+instead of generating a new unusable password. Never delete/rotate that Secret
+behind retained data. Local passwords are not committed or printed. Schema Jobs
+use the same pinned1.32.0 tools/scripts as Compose, safely initializing/updating
+both databases without overwrite/drop. Readiness and bootstrap are bounded.
+
+Ordinary Pod replacement and schema reruns preserve exact completed workflow ID,
+run ID, plan hash and identity-only result. The automated persistence test checks
+different Pod UIDs and unchanged PVC UID/bound volume plus Secret UID/version.
+This is local PVC persistence, **not host-external backup or production HA**.
+
+```sh
+mise run k8s:down               # DESTRUCTIVE: ONLY temporal-demo, including ALL its PVC history
+# To reset deliberately: down, then k8s:up. Old histories will be gone.
+```
+
+Deletion is explicit and idempotent; integration tests leave the cluster/history
+available for inspection. Only disposable Linux CI exercises down/down/up and
+checks old history returns404, followed by a fresh diamond. Local retained history
+is not reset. CI unconditionally attempts scoped deletion; Validate and Compose
+coverage remains.
+Darwin ARM64 Docker acceptance and Linux amd64 CI acceptance are separate gates;
+see [versions/evidence](docs/versions.md). Controller installation/readiness is
+**not** proof of KEDA no-poller scaling or Kyverno admission/registration cleanup.
+
 ## Complete rendered worker graph validation
 
 ```sh
@@ -75,8 +180,14 @@ ambiguous and rejected, even if identical or disabled. Shared graph validation
 rejects unknown/self/cyclic dependencies, globally duplicate worker identities
 and multiple workers in one namespace. This is **graph/source validation**, not a
 general Kubernetes/CRD schema check, admission test, or proof of runnable workers.
-No cluster or Docker runtime is needed. The public task is included additively in
-`mise run validate`, which the existing PR workflow already runs.
+No cluster or Docker runtime is needed. `mise run validate:manifests` additionally
+runs actual Helm lint/render, the CLI over the **complete** application render,
+and kubeconform strict Kubernetes1.35.8 plus release-pinned custom schemas.
+Unknown kinds fail (a negative fixture proves it); no missing-schema skip is used.
+Custom-schema fixtures are validation-only, never deployed. Core schemas use an
+immutable upstream revision; selected CRD schemas are extracted from exact
+hash-verified chart releases; see [schema provenance](k8s/schemas/README.md).
+These checks are included additively in cumulative `mise run validate`.
 
 ## Lifecycle, history and destructive reset
 

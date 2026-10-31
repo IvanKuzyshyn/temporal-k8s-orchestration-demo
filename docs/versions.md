@@ -15,7 +15,7 @@ Controller ruling for review I1: preserve the Go-only Task 1 foundation; runtime
 - **Task 1 — Go/mise foundation:** verify pinned Go/mise and formatting, full-package race tests and vet on the host and Linux CI using `mise run validate`. Darwin arm64 evidence is recorded in the Task 1 report. **Task 1 runtime acceptance remains pending Linux CI until the controller observes and records its passing result.**
 - **Task 2 — SDK contracts:** Temporal Go SDK **v1.50.0** is pinned. Darwin arm64 workflow/activity tests, targeted race tests, and uncached full validation pass (commands and results in `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-2-report.md`). Scheduling, failure, SDK child cancellation, and heartbeating activity-context cancellation are exercised without a live server. **Linux CI acceptance remains pending controller observation.** These tests do not prove server/image/scaler compatibility or the future API's parent start policy.
 - **Task 4 — Compose runtime matrix:** verify selected image availability/digests and architecture support, exact SDK/server/PostgreSQL compatibility, matching schema-tool packaging, default and visibility schema setup/migrations before readiness, and history persistence across container replacement with named volumes. Run the Compose checks on the host and Linux CI; record reset behavior separately from persistence. Darwin-host/Linux ARM64 Docker evidence and controller-reported Linux amd64 CI at the initial Task4 commit are recorded below; fix-round CI requires fresh controller observation.
-- **Task 6 — kind infrastructure matrix:** verify selected kind/Kubernetes, Helm charts and controller/image compatibility on the host and Linux CI. Check CRD schemas and controller/webhook readiness, repeatable database schema Jobs before Temporal readiness, and history persistence across Pod replacement with the PVC; verify and document destructive cluster/PVC reset behavior. Evidence: pending.
+- **Task 6 — kind infrastructure matrix:** exact tools, hash-verified charts, release-extracted CRD schemas, ARM64 controller/webhook readiness, paired Secret/PVC reruns and completed-history Pod-replacement/schema-rerun evidence are recorded below and in task-6-report.md. Destructive cluster deletion/reset evidence is recorded separately there. Linux amd64 acceptance remains pending controller observation; controller readiness does not close Tasks7/8 scaling/lifecycle gates.
 - **Task 7 — no-poller scaler behavior:** on the host and Linux CI, prove that the selected Temporal/KEDA pair exposes workflow and activity queue backlog with no active pollers and activates workers from zero using `queueTypes: "workflow,activity"`; retain scale-down and interruption evidence required by the task. Optional running-workflow counts must not be treated as strict in-flight protection. Evidence: pending.
 - **Task 8 — admission and cleanup before Task 9:** on the host and Linux CI, verify source-Service CREATE/UPDATE admission (malformed dependencies/self-reference rejected; valid roots and registration disable/removal allowed) and real-cluster registration create/update/delete/disable/annotation-removal/preexisting-resource lifecycle against the pinned Kyverno release. Source deletion and loss of policy match require separate assertions. If native generation is insufficient, choose and test explicit cleanup/source validation. **Task 9 Kubernetes discovery must not be enabled until this gate passes.** Evidence: pending.
 
@@ -61,23 +61,23 @@ Task 5 checked upstream metadata before consuming the already-pinned
   `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-5-report.md`.
   Linux PR CI remains controller-observed; no Kubernetes runtime acceptance is claimed.
 
-## Infrastructure selections (Compose consumed in Task 4; later tasks unverified)
+## Infrastructure selections (Task4 Compose; Task6 kind host evidence below)
 
 - Temporal server **1.32.0**, schema/admin tooling **1.32.0** from the same release, chart **1.7.0** (its appVersion is 1.32.0). Release: <https://github.com/temporalio/temporal/releases/tag/v1.32.0>; published chart index: <https://go.temporal.io/helm-charts/index.yaml>. Schema source: <https://github.com/temporalio/temporal/tree/v1.32.0/schema/postgresql/v12>. Use `postgres12` for default and visibility stores, separate databases `temporal` and `temporal_visibility`; schema setup/migration must precede server startup. Pin image digests and verify schema-tool packaging in the consuming infrastructure task.
-- PostgreSQL **16.15**: listed as a supported minor in <https://www.postgresql.org/support/versioning/>. Temporal [visibility requirements](https://docs.temporal.io/self-hosted-guide/visibility) document PostgreSQL 12+ for server 1.20+; [PostgreSQL configuration](https://docs.temporal.io/self-hosted-guide/visibility/postgresql) describes postgres12 configuration. These were selection-time documentation, not experiments. Task 4 Compose volume/restart/reset evidence is below; kind PVC preservation and cluster reset remain untested.
+- PostgreSQL **16.15**: listed as a supported minor in <https://www.postgresql.org/support/versioning/>. Temporal [visibility requirements](https://docs.temporal.io/self-hosted-guide/visibility) document PostgreSQL 12+ for server 1.20+; [PostgreSQL configuration](https://docs.temporal.io/self-hosted-guide/visibility/postgresql) describes postgres12 configuration. These were selection-time documentation, not experiments. Task 4 Compose volume/restart/reset evidence is below; observed host kind PVC/history persistence is recorded in the [Task 6 evidence](#task-6-consumed-kind-tools-charts-schemas-and-host-evidence) and [PR8 simplification evidence](#pr8-plain-manifest-simplification-2026-10-30). Latest-head Linux CI acceptance, including destructive cluster-reset verification, remains pending controller observation.
 - kind **0.33.0**, Kubernetes **1.35.8**, image `kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0`, listed in <https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0>. Do not use kind's newer default node version blindly.
-- Helm **4.3.1**, <https://github.com/helm/helm/releases/tag/v4.3.1>. Rendering/install compatibility with these charts is still to be exercised.
+- Helm **4.3.1**, <https://github.com/helm/helm/releases/tag/v4.3.1>. Task6 host render/install/rerun evidence is recorded below; Linux CI remains separately observed.
 - KEDA app **2.21.0**, chart **2.21.0**: <https://github.com/kedacore/keda/releases/tag/v2.21.0>, <https://kedacore.github.io/charts/index.yaml>. The [2.21 matrix](https://keda.sh/docs/2.21/operate/cluster/) lists Kubernetes 1.34–1.36, including selected 1.35. [Pinned scaler docs](https://keda.sh/docs/2.21/scalers/temporal/) support `queueTypes: "workflow,activity"`, activation threshold and optional `includeRunningWorkflowCount`. Running counts are visibility-based and not strict in-flight protection. [Release source](https://github.com/kedacore/keda/blob/v2.21.0/pkg/scalers/temporal_scaler.go) uses Temporal queue APIs; reliable backlog with zero pollers and this exact server pair **must still be tested** before discovery/scaling is combined.
 - Kyverno app **1.19.2**, chart **3.9.2**: <https://github.com/kyverno/kyverno/releases/tag/v1.19.2>, <https://github.com/kyverno/kyverno/blob/v1.19.2/charts/kyverno/Chart.yaml>, <https://kyverno.github.io/kyverno/index.yaml>. Chart Kubernetes constraint is >=1.25.0-0 (a declared minimum, not a tested-version guarantee). [Platform notes](https://kyverno.io/docs/installation/platform-notes/) and [generate lifecycle](https://kyverno.io/docs/policy-types/cluster-policy/generate/) are primary guidance. Synchronization, deletion of a source and a source no longer matching are distinct. Proposed synchronized per-Service generation plus existing-resource generation is **provisional**: Task 8 must prove create/update/delete/disable/remove/preexisting behavior against this release and choose explicit cleanup/source validation if necessary. Discovery must not be enabled without that proof.
 
-Later-task tools remain absent from `[tools]` to keep `mise install` Go-only. Add exact pins in consuming tasks. Task 4 verifies the Compose image/schema/persistence subset below; Kubernetes charts/PVCs/controllers/scaling and Kyverno lifecycle are **not verified here**. Recheck selections when consumed; upstream release metadata can have timestamps later than the dated planning documents.
+Task6 now consumes/pins kind0.33.0, Helm4.3.1, matching kubectl1.35.8 and kubeconform0.8.0 in `[tools]`, alongside unchanged Go1.27.3. Task4 verifies the Compose subset below; Task6 host Kubernetes/controller/PVC evidence is separate. Scaling and Kyverno lifecycle remain **unverified** until their assigned gates. Recheck selections when consumed; upstream release metadata can have timestamps later than the dated planning documents.
 
 ## CI action provenance and review
 
 Resolved upstream release tags to commits through the GitHub commits API, then read `action.yml` at each exact commit before selecting inputs:
 
 - `actions/checkout` **v7.0.1**, `3d3c42e5aac5ba805825da76410c181273ba90b1`: <https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml>. Node 24; disable credential persistence and global safe-directory modification.
-- The local composite action `.github/actions/setup-mise/action.yaml` wraps `jdx/mise-action` **v5.2.2**, `8418fedb1110381a0d3ba51a7a415d7c1b884550`, unchanged; workflows call `./.github/actions/setup-mise` after checkout: <https://github.com/jdx/mise-action/blob/8418fedb1110381a0d3ba51a7a415d7c1b884550/action.yml>. Node 24; exact mise version, Go-only install, cache disabled, no persisted token or OIDC. Download verification is described by the action; bundled JavaScript is not independently audited here.
+- The local composite action `.github/actions/setup-mise/action.yaml` wraps `jdx/mise-action` **v5.2.2**, `8418fedb1110381a0d3ba51a7a415d7c1b884550`, unchanged; workflows call `./.github/actions/setup-mise` after checkout: <https://github.com/jdx/mise-action/blob/8418fedb1110381a0d3ba51a7a415d7c1b884550/action.yml>. Node 24; exact mise version, all consumed repository tools installed consistently (Go/kind/Helm/kubectl/kubeconform), cache disabled, no persisted token or OIDC. Download verification is described by the action; bundled JavaScript is not independently audited here.
 
 CI uses read-only contents permissions, `pull_request` (not `pull_request_target`), a bounded timeout, and the exact local `mise run validate` command. Linux amd64 CI is configured, **not executed by this local task**; the controller must observe its result after opening the PR. Local verification evidence is recorded in the Task 1 report.
 
@@ -144,4 +144,113 @@ reports Linux Validate **40317233875** and Compose **40317233992** passed at
 in about six minutes. These are controller observations, not independently
 retrieved logs in this implementer session. Fix round1 (fatal lifecycle, cleanup
 failure propagation and elapsed smoke budgets) requires fresh CI observation;
-its host rerun evidence is in task-4-report.md. Kubernetes/controller gates remain open.
+its host rerun evidence is in task-4-report.md. Task6 host Kubernetes evidence follows; scaler/policy lifecycle gates remain open.
+
+## Task 6 consumed kind tools, charts, schemas and host evidence
+
+Consumed **2026-10-30 UTC**, Darwin ARM64 host / Docker Linux aarch64,
+12CPUs/~7.75GiB VM. Existing Compose and unrelated three-node kind were left
+running. Project mise pins: unchanged Go1.27.3, kind0.33.0, matching Kubernetes/
+kubectl1.35.8, Helm4.3.1 and **kubeconform0.8.0**
+([exact release](https://github.com/yannh/kubeconform/releases/tag/v0.8.0)).
+`kubeconform -v` reports v0.8.0. Global Helm4.3.0/kubectl1.37.0 are not used.
+Node and PostgreSQL16.15/server+admin-tools1.32.0/UI2.48.0 use the already selected
+multi-platform digests unchanged; PostgreSQL plugin postgres12, schemas1.19/1.14.
+
+- KEDA chart/app **2.21.0/2.21.0**: tagged metadata and versioned
+  [Kubernetes matrix](https://keda.sh/docs/2.21/operate/cluster/) rechecked;
+  supported1.34–1.36 includes1.35.8. Helm4.3.1 install/rerun, all three
+  controller Deployments, CRDs and admission CA injection passed on Linux ARM64.
+- Kyverno chart/app **3.9.2/1.19.2**: tagged Chart.yaml/published archive checked;
+  declared kubeVersion>=1.25.0-0 includes1.35.8 (a minimum, not an upstream tested
+  platform guarantee). Actual single-replica admission/background/cleanup/reports
+  readiness, required policy/verification hooks and CA injection passed on the
+  selected node. Empty optional resource mutation hooks are normal without
+  policies. Legacy ClusterPolicy is supported but deprecated; Task8 must still
+  prove the approved admission/generation/cleanup behavior before Task9 discovery.
+- Chart archives have full SHA256 locks in `k8s/infrastructure/versions.env`:
+  KEDA `a7da56bf41a33dad9d2fc82a6fdecee552fff947d80bf1e1dbcf4db0f9e26dee`;
+  Kyverno `f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e`.
+  Sources: <https://kedacore.github.io/charts/index.yaml>,
+  <https://kyverno.github.io/kyverno/index.yaml>. The original Helm install checked
+  archive bytes on each rerun. The apply flow consumes committed KEDA YAML and
+  runtime-rendered Kyverno (including both CRD subcharts). Kyverno's exact archive
+  is downloaded with finite limits only on cache miss, and SHA256-verified even
+  on cache hits; tampering fails before Kyverno mutations. Startup and offline
+  validation share `scripts/render-kyverno.sh`; cold archive/schema caches need
+  network access, but ordinary validation never needs a live cluster.
+- Controller images, including Kyverno init, use exact release+multi-platform
+  digests in the committed manifests and reproducibility values. `docker buildx
+  imagetools inspect` confirmed Linux ARM64 and amd64 for every consumed image.
+  Authoritative deployment pins are in `k8s/infrastructure/keda.yaml` and
+  `k8s/infrastructure/kyverno-values.yaml`; KEDA values reproduce its manifest. Helm lifecycle hooks are not deployed
+  by the simplified apply flow; see the infrastructure README.
+- kubeconform uses strict Kubernetes1.35.8 built-in schemas at immutable
+  `yannh/kubernetes-json-schema` revision
+  `47163ead3738a996c3e30be9691bb37b8071d9d3`. Required ScaledObject/ClusterPolicy
+  schemas are extracted from the **exact selected chart releases**, committed
+  locally; see `k8s/schemas/README.md`. A sampled pinned CRD catalog differed from
+  those release schemas and was deliberately not consumed. Known invalid custom
+  fields and an unknown-kind fixture fail; no missing-schema skip is used.
+  Validation-only custom fixtures are never deployed.
+
+Original host evidence used the granular provisioning tasks (now removed),
+`test:kind-baseline`, and sequential `test:kind-persistence`. Current provisioning
+is `mise run k8s:up`; the simplification evidence below supersedes those steps.
+The diamond completed across five application namespaces with sorted identity-only
+results, canonical hash and durable replay after Kubernetes orchestrator restart.
+Different Temporal/PostgreSQL Pod UIDs retained the same PVC UID/bound volume and
+immutable Secret UID/resourceVersion; schema reruns preserved byte-identical
+workflow/run/hash/result. Infrastructure reruns reused installed credentials/PVC.
+The first persistence run overlapped an infra rerun and is **excluded**; a fresh
+sequential run after explicit infra exit0 is accepted evidence.
+
+Real startup fixes: disable Kubernetes Service-link injection to prevent
+TEMPORAL_UI_PORT=tcp://… corrupting the UI's integer port config; allow Kyverno's
+empty optional resource mutation hook while requiring actual policy/admission
+hooks and CA bundles. No scaling, policy admission, registration cleanup or live
+discovery is claimed. Linux amd64 CI is configured in `kind-integration.yaml`;
+**no Linux CI execution is claimed until controller observation**. Full tests,
+reset evidence and final cluster/tunnel status:
+`.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-6-report.md`.
+
+Controller subsequently observed all three initial Linux jobs passing at
+`f315c5e76550956e9cc8770a2cd90a4ad9c4954e`: Validate **41064345519** (2m11s),
+Compose **41064345482** (6m23s), Kind **41064345647** (7m24s). These are
+controller-supplied observations, not independently retrieved logs here.
+Review-minor follow-ups require fresh controller CI observation; later scaling
+and Kyverno lifecycle gates remain unchanged.
+
+## PR8 plain-manifest simplification (2026-10-30)
+
+Same Darwin ARM64 host, pinned tools/images/archives and existing dedicated
+`temporal-demo` cluster; no local down/recreation/reset. `mise run k8s:up` passed
+**twice sequentially**, adopting the prior same-version Helm resources with
+native apply. CRDs use SSA without force; ordinary controllers/apps use
+client-side apply. A server-side dry-run first exposed Helm/defaulted-field
+conflicts for ordinary resources; client-side apply avoids forcing ownership.
+First adoption emitted expected missing-last-applied notices. Existing Helm
+release records/completed hook Jobs remain inert, not uninstalled; do not run
+Helm lifecycle commands against these kubectl-managed resources.
+
+The subsequent `mise run test:kind-baseline` and `mise run test:kind-persistence`
+passed sequentially, including Pod replacement, schema1.19/1.14 and durable
+keyed replay. A **pre-conversion** completed workflow's full API result and keyed
+replay remained byte-identical afterward. PVC UID/bound volume, immutable Secret
+UID/resourceVersion, all existing unrelated Docker container IDs and global
+kubeconfig SHA256 were unchanged. All controllers/webhook CAs and bootstrap Jobs
+were ready/complete; no owned port-forward remained. Evidence artifacts and exact
+commands: `.superpowers/sdd/2026-10-30-pr8-simple-k8s/task-1-report.md`.
+
+Complete vendored controller YAML joins strict manifest validation. The pinned
+core catalog lacks the CRD-definition model; its standalone strict schema now
+comes from Kubernetes1.35.8's exact Swagger release commit (provenance and
+reproduction in `k8s/schemas/README.md`). Focused validation reports **130 valid,
+0 invalid/errors/skipped** and rejects unknown kinds. Helm's icon recommendation
+is informational; upstream Kyverno policy-API deprecation/schema warnings, if
+emitted by Kubernetes, are not suppressed. These do not prove scaling or policy
+lifecycle behavior.
+
+Disposable Linux CI is configured to run up twice, baseline/persistence, explicit
+down/down/up, old-history404 and a fresh diamond. **No latest-head Linux CI result
+is claimed here**; the controller observes that separate gate.

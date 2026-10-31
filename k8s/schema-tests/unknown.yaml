@@ -1,0 +1,5 @@
+apiVersion: imaginary.invalid/v1
+kind: Unknown
+metadata:
+  name: must-fail
+  namespace: default

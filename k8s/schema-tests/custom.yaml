@@ -1,0 +1,40 @@
+# Validation-only fixtures; these are NEVER deployed in the static baseline.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: schema-only
+  namespace: temporal-demo-worker-a
+spec:
+  scaleTargetRef:
+    name: worker-a
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  triggers:
+    - type: temporal
+      metadata:
+        endpoint: temporal.temporal.svc.cluster.local:7233
+        namespace: default
+        taskQueue: worker-a.v1.temporal
+        queueTypes: workflow,activity
+        targetQueueSize: '1'
+        activationTargetQueueSize: '0'
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: schema-only
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: validation-only
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: validation-only fixture
+        pattern:
+          metadata:
+            labels:
+              demo: '?*'

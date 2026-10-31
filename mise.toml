@@ -2,6 +2,10 @@ min_version = "2026.10.17"
 
 [tools]
 go = "1.27.3"
+kind = "0.33.0"
+helm = "4.3.1"
+kubectl = "1.35.8"
+"aqua:yannh/kubeconform" = "0.8.0"
 
 [env]
 GOTOOLCHAIN = "local"
@@ -15,7 +19,7 @@ description = "Test complete rendered graph extraction and real CLI fixture exit
 run = "go test -race ./internal/manifest ./cmd/validate-graph"
 
 [tasks.validate]
-description = "Check formatting, all tests/race, vet, manifests and Compose config (same command in CI)"
+description = "Check Go/race/vet, Helm/full graph/strict schemas and Compose config (same command in CI)"
 run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
@@ -25,9 +29,51 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
+for script in scripts/*.sh; do
+  bash -n "$script"
+done
 mise run test:manifests
+mise run validate:manifests
 bash scripts/compose.sh config
 '''
+
+[tasks."k8s:up"]
+description = "Create if absent and apply the complete fixed-replica kind demo; preserve history on rerun"
+run = "bash scripts/k8s-up.sh"
+
+[tasks."k8s:down"]
+description = "DESTRUCTIVE: delete ONLY temporal-demo and ALL its PVC history"
+run = "bash scripts/k8s-down.sh"
+
+[tasks."validate:manifests"]
+run = "bash scripts/validate-manifests.sh"
+
+[tasks."api:forward"]
+run = '''
+bash -euo pipefail -c '
+source scripts/kind-common.sh
+assert_context
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
+'
+'''
+
+[tasks."ui:forward"]
+run = '''
+bash -euo pipefail -c '
+source scripts/kind-common.sh
+assert_context
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal port-forward --address 127.0.0.1 service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
+'
+'''
+
+[tasks."test:kind-baseline"]
+run = "bash scripts/kind-integration.sh baseline"
+
+[tasks."test:kind-persistence"]
+run = "bash scripts/kind-integration.sh persistence"
+
+[tasks."kind:diagnostics"]
+run = "bash scripts/kind-diagnostics.sh"
 
 [tasks."images:build"]
 description = "Build both app images with a clean Git SHA or unique dirty local tag"

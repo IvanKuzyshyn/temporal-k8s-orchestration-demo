@@ -1,0 +1,58 @@
+name: Kind integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          set-safe-directory: false
+      - uses: ./.github/actions/setup-mise
+      - name: Cumulative Go, chart, complete graph, strict schemas and Compose configuration
+        run: mise run validate
+      - run: mise run k8s:up
+      - run: mise run k8s:up
+      - name: Baseline and retained-history identity
+        shell: bash
+        run: |
+          mise run test:kind-baseline | tee .local/ci-baseline.log
+          grep -F '{"workflowId":' .local/ci-baseline.log > .local/history-before-reset.json
+      - run: mise run test:kind-persistence
+      - name: Destructive reset ONLY on this disposable runner (including idempotent down)
+        run: |
+          mise run k8s:down
+          mise run k8s:down
+          mise run k8s:up
+      - name: Old history is absent after explicit reset
+        shell: mise exec -- bash --noprofile --norc -eo pipefail {0}
+        run: |
+          export KUBECONFIG="$PWD/.local/kubeconfig"
+          kubectl --context kind-temporal-demo -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator 18080:8080 > .local/reset-forward.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          ready=false
+          for ((i=0;i<60;i++)); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18080/readyz >/dev/null 2>&1; then ready=true; break; fi
+            sleep 1
+          done
+          [[ $ready == true ]]
+          id=$(jq -er .workflowId .local/history-before-reset.json)
+          code=$(curl -sS --max-time 10 -o .local/reset-result.json -w '%{http_code}' "http://127.0.0.1:18080/runs/$id")
+          [[ $code == 404 ]]
+          echo 'PASS: old workflow history is absent (404) after explicit cluster reset'
+      - run: mise run test:kind-baseline
+      - name: Scoped secret-free failure diagnostics
+        if: failure()
+        run: mise run kind:diagnostics
+      - name: Always delete ONLY temporal-demo cluster and its local PVC
+        if: always()
+        run: mise run k8s:down

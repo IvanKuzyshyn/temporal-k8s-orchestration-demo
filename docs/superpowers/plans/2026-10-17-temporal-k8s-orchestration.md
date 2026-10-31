@@ -79,7 +79,7 @@ For KEDA, the baseline requires `queueTypes: "workflow,activity"` and reliable b
 - `cmd/validate-graph/main.go`: complete-manifest graph validation using `internal/plan`.
 - `tests/integration/`: bounded Go integration tests enabled with build tag `integration`; tests require explicit environment configuration.
 - `deploy/`: Dockerfiles, Compose, and static registry fixture.
-- `k8s/apps/`: Helm chart for application resources; `k8s/infrastructure/`: pinned controller/server configuration; `k8s/policies/`: policy manifests and fixtures.
+- `k8s/worker-helm-chart/`: Helm chart for application resources; `k8s/infrastructure/`: kind input and pinned per-component controller/server manifests; `k8s/policies/`: policy manifests and fixtures.
 - `scripts/`: small shell wrappers for infrastructure/test setup, with `set -euo pipefail` and explicit context checks.
 - `mise.toml`: documented local task entry points; `.github/workflows/validate.yaml`: cumulative PR checks from Task 1; `compose.yaml`: added in Task 4; `kind-integration.yaml`: automatic bounded PR integration from Task 6, plus manually dispatched longer experiments.
 
@@ -231,21 +231,23 @@ HTTP contract:
 
 ## Task 6: kind baseline with fixed worker replicas
 
-**Files:** Create `k8s/kind/config.yaml`, `k8s/infrastructure/{versions.env,temporal.yaml,postgresql.yaml,schema-job.yaml,keda-values.yaml,kyverno-values.yaml}`, `k8s/apps/{Chart.yaml,values.yaml,values-static.yaml}`, `k8s/apps/templates/{namespaces,orchestrator,workers,static-registry}.yaml`, `scripts/{cluster-create,infrastructure-install,images-load,apps-deploy,cluster-delete,validate-manifests}.sh`, `.github/workflows/kind-integration.yaml`; modify `mise.toml`, `docs/versions.md`, `README.md`.
+**Approved PR8 simplification (2026-10-30):** Per-component plain manifests and two direct lifecycle scripts replace granular provisioning; see `2026-10-30-pr8-simple-k8s.md`.
 
-**Interfaces:** Produces `mise run cluster:create`, `infra:install`, `images:load`, `apps:deploy-static`, `api:forward`, `ui:forward`, `cluster:delete`. Static overlay has workers at one replica and no ScaledObjects. Chart values define identities/dependencies once and create annotations plus matching queue environment values. Temporal frontend address is fixed through the chosen Service name in namespace `temporal`.
+**Files:** Create `k8s/infrastructure/{versions.env,kind.yaml,temporal.yaml,keda.yaml,keda-values.yaml,kyverno-values.yaml}` (2026-10-31 follow-up: Kyverno is rendered from its checksum-pinned chart at startup/offline validation, not committed as `kyverno.yaml`), `k8s/worker-helm-chart/{Chart.yaml,values.yaml,values-static.yaml}`, `k8s/worker-helm-chart/templates/{namespaces,orchestrator,workers,static-registry}.yaml`, `scripts/{k8s-up,k8s-down,kind-common,kind-integration,kind-diagnostics,validate-manifests}.sh` (forwarding is inline in mise), `.github/workflows/kind-integration.yaml`; modify `mise.toml`, `docs/versions.md`, `README.md`.
+
+**Interfaces:** Produces `mise run k8s:up`, `k8s:down`, `api:forward`, `ui:forward`. Static overlay has workers at one replica and no ScaledObjects. Chart values define identities/dependencies once and create annotations plus matching queue environment values. Temporal frontend address is fixed through the chosen Service name in namespace `temporal`.
 
 - [ ] Add render checks asserting each worker Service/Deployment queue identity agrees, application namespaces are explicit, and no ScaledObjects exist in the static overlay. Render to a temporary path and pass it to Task 5 validator; fail before templates exist.
-- [ ] Implement single-node kind creation with pinned node image, Helm-pinned controllers, PostgreSQL StatefulSet/Service/PVC, schema initialization Job, and single-instance self-hosted Temporal. Wait for PostgreSQL, successful schema setup, server health, and Temporal namespace bootstrap in that order. Wait for CRDs/controllers/webhooks before their dependent resources. Scripts must verify context `kind-temporal-demo` before mutations or deletion.
+- [ ] Implement single-node kind creation with pinned node image, vendored chart-pinned controller/CRD manifests, PostgreSQL StatefulSet/Service/PVC, schema initialization Job, and single-instance self-hosted Temporal. Wait for PostgreSQL, successful schema setup, server health, and Temporal namespace bootstrap in that order. Wait for CRDs/controllers/webhooks before their dependent resources. Scripts must verify context `kind-temporal-demo` before mutations or deletion.
 - [ ] Render one namespace per worker and a separate orchestrator namespace. Enforce exactly one worker per labeled namespace in the chart/render tests. Use fully qualified cross-namespace Temporal DNS. Add `mise run validate:manifests` using pinned Kubernetes/CRD schemas without skipping unknown kinds, `mise run test:kind-baseline`, and `mise run test:kind-persistence`. The persistence test replaces Temporal and PostgreSQL Pods without deleting PVCs and verifies completed history plus safe schema-job rerun.
 - [ ] Introduce bounded PR-triggered kind CI running the same local render, baseline, and persistence checks, with diagnostics and unconditional cleanup. Add Helm lint/render/schema checks to cumulative `mise run validate`.
 - [ ] Build/load images and deploy the static registry overlay. Wire health probes, resource requests/limits, termination grace, and one orchestrator replica. Avoid blanket readiness waits against zero-replica Deployments in later overlays.
-- [ ] Run all render checks, then `mise run cluster:create`, `infra:install`, `images:load`, and `apps:deploy-static`. Port-forward and run the existing API smoke assertions against kind; require completion without discovery/scaling enabled.
+- [ ] Run all render checks, then `mise run k8s:up` twice (reruns preserve Secret/PVC/history). Port-forward and run the existing API smoke assertions against kind; require completion without discovery/scaling enabled.
 - [ ] Record exact tested versions and host architecture. Commit: `feat: deploy fixed-replica demo to kind`.
 
 **Definition of done:** The baseline diamond runs in kind across five separate application namespaces, with workers fixed at one; PostgreSQL PVC preserves history across server/database Pod replacement.
 
-**Local verification:** With Docker running: `mise run cluster:create`, `mise run infra:install`, `mise run images:load`, `mise run apps:deploy-static`, `mise run validate`, `mise run test:kind-baseline`, and `mise run test:kind-persistence` pass. Integration tasks manage localhost port-forwarding and cleanup; no manual persistent tunnel is assumed.
+**Local verification:** With Docker running: `mise run k8s:up` twice, `mise run validate`, `mise run test:kind-baseline`, and `mise run test:kind-persistence` pass. Destructive down/down/up and history404 proof belongs only to explicitly disposable CI. Integration tasks manage localhost port-forwarding and cleanup; no manual persistent tunnel is assumed.
 
 **CI increment:** Add automatic bounded kind baseline/persistence jobs and local Helm/schema checks. Retain Compose and Go coverage.
 
@@ -253,7 +255,7 @@ HTTP contract:
 
 ## Task 7: Isolated Temporal-to-KEDA scaling experiment
 
-**Files:** Create `k8s/apps/templates/scaledobjects.yaml`, `k8s/apps/values-scaling.yaml`, `tests/integration/scaling_test.go`, `docs/autoscaling.md`; modify worker template and `mise.toml`.
+**Files:** Create `k8s/worker-helm-chart/templates/scaledobjects.yaml`, `k8s/worker-helm-chart/values-scaling.yaml`, `tests/integration/scaling_test.go`, `docs/autoscaling.md`; modify worker template and `mise.toml`.
 
 **Interfaces:** Produces `mise run apps:deploy-scaling` and `mise run test:scaling`. Static registry remains enabled so discovery cannot obscure scaler failures. Helm sets worker replicas to zero on first scaled installation; subsequent upgrades omit replica writes once KEDA owns scaling, using an explicit bootstrap value/task rather than a continuous replica reset.
 
@@ -295,7 +297,7 @@ HTTP contract:
 
 ## Task 9: Live Kubernetes registry and pre-start protection
 
-**Files:** Create `internal/registry/{kubernetes,decode}.go`, `internal/registry/kubernetes_test.go`, `k8s/apps/templates/rbac.yaml`, `k8s/apps/values.yaml` discovery settings, `tests/integration/registry_test.go`; modify orchestrator wiring and chart.
+**Files:** Create `internal/registry/{kubernetes,decode}.go`, `internal/registry/kubernetes_test.go`, `k8s/worker-helm-chart/templates/rbac.yaml`, `k8s/worker-helm-chart/values.yaml` discovery settings, `tests/integration/registry_test.go`; modify orchestrator wiring and chart.
 
 **Interfaces:** `registry.NewKubernetes(client kubernetes.Interface, namespaceSelector string) *Kubernetes`; `(*Kubernetes).Run(ctx context.Context) error`; implements Task 1 `Provider`. Watch Namespaces matching `temporal-demo.io/worker-namespace=true`, then create one namespace-scoped registration watcher per selected namespace. A ClusterRole grants only Namespace get/list/watch. Each worker namespace has a ConfigMap read-only Role and a RoleBinding whose subject is the orchestrator service account in `temporal-demo-orchestrator`; no cluster-wide ConfigMap permission. All selected namespace caches must synchronize before accepting starts. Adding a namespace activates a watcher without restarting the orchestrator; deleting it or removing its label removes its registrations. Failed namespace reads invalidate synchronization rather than silently dropping workers.
 
