@@ -95,7 +95,7 @@ Manual reads:
 
 ```sh
 KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal-demo get pods -A
-mise run kind:diagnostics       # scoped status/warnings/app logs; no Secrets/infra logs
+mise run kind:diagnostics       # scoped status/app logs; failure-only credential-redacted schema evidence
 ```
 
 Infrastructure is plain per-component YAML in `k8s/infrastructure/`:
