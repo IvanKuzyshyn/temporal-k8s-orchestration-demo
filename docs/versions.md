@@ -173,13 +173,17 @@ multi-platform digests unchanged; PostgreSQL plugin postgres12, schemas1.19/1.14
   Kyverno `f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e`.
   Sources: <https://kedacore.github.io/charts/index.yaml>,
   <https://kyverno.github.io/kyverno/index.yaml>. The original Helm install checked
-  archive bytes on each rerun; the simplified apply flow consumes committed
-  manifests rendered from those verified bytes, including bundled subcharts.
+  archive bytes on each rerun. The apply flow consumes committed KEDA YAML and
+  runtime-rendered Kyverno (including both CRD subcharts). Kyverno's exact archive
+  is downloaded with finite limits only on cache miss, and SHA256-verified even
+  on cache hits; tampering fails before Kyverno mutations. Startup and offline
+  validation share `scripts/render-kyverno.sh`; cold archive/schema caches need
+  network access, but ordinary validation never needs a live cluster.
 - Controller images, including Kyverno init, use exact release+multi-platform
   digests in the committed manifests and reproducibility values. `docker buildx
   imagetools inspect` confirmed Linux ARM64 and amd64 for every consumed image.
-  Authoritative deployment pins are in `k8s/infrastructure/{keda,kyverno}.yaml`;
-  the corresponding values reproduce them. Helm lifecycle hooks are not deployed
+  Authoritative deployment pins are in `k8s/infrastructure/keda.yaml` and
+  `k8s/infrastructure/kyverno-values.yaml`; KEDA values reproduce its manifest. Helm lifecycle hooks are not deployed
   by the simplified apply flow; see the infrastructure README.
 - kubeconform uses strict Kubernetes1.35.8 built-in schemas at immutable
   `yannh/kubernetes-json-schema` revision

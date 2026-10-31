@@ -1,3 +1,10 @@
+# Bootstrap selectors for both CRD subcharts; keep large CRDs on SSA.
+crds:
+  customLabels:
+    temporal-demo.io/phase: crds
+kyverno-api:
+  labels:
+    temporal-demo.io/phase: crds
 # Single replicas for a local baseline, not production HA.
 admissionController:
   replicas: 1

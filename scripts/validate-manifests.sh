@@ -16,7 +16,8 @@ trap 'rm -rf "$tmp"' EXIT
 helm lint k8s/worker-helm-chart -f k8s/worker-helm-chart/values-static.yaml --strict
 helm template temporal-demo k8s/worker-helm-chart -f k8s/worker-helm-chart/values-static.yaml --kube-version 1.35.8 > "$tmp/apps.yaml"
 go run ./cmd/validate-graph < "$tmp/apps.yaml"
-validate "$tmp/apps.yaml" k8s/infrastructure/temporal.yaml k8s/infrastructure/keda.yaml k8s/infrastructure/kyverno.yaml k8s/schema-tests/custom.yaml
+bash scripts/render-kyverno.sh > "$tmp/kyverno.yaml"
+validate "$tmp/apps.yaml" k8s/infrastructure/temporal.yaml k8s/infrastructure/keda.yaml "$tmp/kyverno.yaml" k8s/schema-tests/custom.yaml
 # Assert failure locally and in every CI consumer (never mask a validator failure).
 if validate k8s/schema-tests/unknown.yaml > "$tmp/unknown.log" 2>&1; then
   echo 'FAIL: strict schema validator accepted unknown kind' >&2; exit 1

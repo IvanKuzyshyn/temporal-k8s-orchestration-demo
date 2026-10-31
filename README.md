@@ -98,10 +98,14 @@ KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal
 mise run kind:diagnostics       # scoped status/app logs; failure-only credential-redacted schema evidence
 ```
 
-Infrastructure is plain per-component YAML in `k8s/infrastructure/`:
+Infrastructure inputs live in `k8s/infrastructure/`:
 `kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
 PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
-`keda.yaml` and `kyverno.yaml` contain complete pinned controllers/CRDs/RBAC.
+`keda.yaml` contains complete pinned controllers/CRDs/RBAC. Kyverno's pinned
+chart is downloaded only on cache miss, SHA256-verified on **every** use, then
+rendered with `kyverno-values.yaml` and strictly validated before applying the
+same temporary manifest. Cold archive/schema caches require network access;
+ordinary validation needs no live cluster.
 `k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
 Temporal readiness → completed default-namespace bootstrap → UI; then controller
 CRDs (server-side apply), establishment and controllers/webhook CAs. Bootstrap

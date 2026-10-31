@@ -13,9 +13,13 @@ work=$(mktemp -d)
 trap 'rc=$?; rm -rf "$work"; if ((rc!=0)); then bash scripts/kind-diagnostics.sh || true; fi; exit "$rc"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+# Render and strictly validate once before any Kyverno mutations.
+bash scripts/render-kyverno.sh > "$work/kyverno.yaml"
+bash scripts/validate-manifests.sh "$work/kyverno.yaml"
 k wait --for=condition=Ready node/temporal-demo-control-plane --timeout=120s
 # Labels let kubectl apply ordinary manifests in explicit bootstrap phases.
-k apply -f k8s/infrastructure/temporal.yaml -f k8s/infrastructure/keda.yaml -f k8s/infrastructure/kyverno.yaml -l temporal-demo.io/phase=namespace
+k apply -f k8s/infrastructure/temporal.yaml -f k8s/infrastructure/keda.yaml -l temporal-demo.io/phase=namespace
+k apply -f "$work/kyverno.yaml" -l temporal-demo.io/phase=namespace
 secret=$(k -n temporal get secret postgres-credentials --ignore-not-found -o name)
 pvc=$(k -n temporal get pvc data-postgres-0 --ignore-not-found -o name)
 if [[ -z $secret ]]; then
@@ -43,9 +47,11 @@ k -n temporal rollout status deployment/temporal-ui --timeout=120s
 # CRDs exceed client-side annotation limits. SSA shares matching Helm-owned
 # fields without forcing conflicts. Ordinary resources use client-side apply,
 # avoiding SSA conflicts on API-defaulted fields from the old Helm install.
-k apply --server-side --field-manager=temporal-demo -f k8s/infrastructure/keda.yaml -f k8s/infrastructure/kyverno.yaml -l temporal-demo.io/phase=crds
+k apply --server-side --field-manager=temporal-demo -f k8s/infrastructure/keda.yaml -l temporal-demo.io/phase=crds
+k apply --server-side --field-manager=temporal-demo -f "$work/kyverno.yaml" -l temporal-demo.io/phase=crds
 k wait --for=condition=Established crd -l temporal-demo.io/phase=crds --timeout=120s
-k apply -f k8s/infrastructure/keda.yaml -f k8s/infrastructure/kyverno.yaml -l temporal-demo.io/phase=controller
+k apply -f k8s/infrastructure/keda.yaml -l temporal-demo.io/phase=controller
+k apply -f "$work/kyverno.yaml" -l 'temporal-demo.io/phase notin (crds,namespace)'
 for name in keda-operator keda-operator-metrics-apiserver keda-admission-webhooks; do
   k -n keda rollout status "deployment/$name" --timeout=180s
 done

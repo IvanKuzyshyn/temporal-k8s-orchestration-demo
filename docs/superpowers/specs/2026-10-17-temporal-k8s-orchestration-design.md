@@ -199,7 +199,7 @@ Kind is the authoritative integration environment. Start with one node, preload 
 ```text
 .github/workflows/       Go and manifest/policy validation
 k8s/
-  infrastructure/        kind input; Temporal, KEDA and Kyverno plain manifests
+  infrastructure/        kind input; Temporal/KEDA manifests; pinned Kyverno chart values
   policies/              Registration generation and validation
   worker-helm-chart/     Orchestrator and worker Helm templates/values
 services/

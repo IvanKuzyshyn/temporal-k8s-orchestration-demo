@@ -233,7 +233,7 @@ HTTP contract:
 
 **Approved PR8 simplification (2026-10-30):** Per-component plain manifests and two direct lifecycle scripts replace granular provisioning; see `2026-10-30-pr8-simple-k8s.md`.
 
-**Files:** Create `k8s/infrastructure/{versions.env,kind.yaml,temporal.yaml,keda.yaml,kyverno.yaml,keda-values.yaml,kyverno-values.yaml}`, `k8s/worker-helm-chart/{Chart.yaml,values.yaml,values-static.yaml}`, `k8s/worker-helm-chart/templates/{namespaces,orchestrator,workers,static-registry}.yaml`, `scripts/{k8s-up,k8s-down,kind-common,kind-integration,kind-diagnostics,validate-manifests}.sh` (forwarding is inline in mise), `.github/workflows/kind-integration.yaml`; modify `mise.toml`, `docs/versions.md`, `README.md`.
+**Files:** Create `k8s/infrastructure/{versions.env,kind.yaml,temporal.yaml,keda.yaml,keda-values.yaml,kyverno-values.yaml}` (2026-10-31 follow-up: Kyverno is rendered from its checksum-pinned chart at startup/offline validation, not committed as `kyverno.yaml`), `k8s/worker-helm-chart/{Chart.yaml,values.yaml,values-static.yaml}`, `k8s/worker-helm-chart/templates/{namespaces,orchestrator,workers,static-registry}.yaml`, `scripts/{k8s-up,k8s-down,kind-common,kind-integration,kind-diagnostics,validate-manifests}.sh` (forwarding is inline in mise), `.github/workflows/kind-integration.yaml`; modify `mise.toml`, `docs/versions.md`, `README.md`.
 
 **Interfaces:** Produces `mise run k8s:up`, `k8s:down`, `api:forward`, `ui:forward`. Static overlay has workers at one replica and no ScaledObjects. Chart values define identities/dependencies once and create annotations plus matching queue environment values. Temporal frontend address is fixed through the chosen Service name in namespace `temporal`.
 
