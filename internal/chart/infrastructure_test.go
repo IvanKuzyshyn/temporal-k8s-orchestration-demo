@@ -143,6 +143,46 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 	}
 }
 
+// A brief PostgreSQL Service outage must permit bounded native Job retries,
+// without restarting containers or extending the bootstrap's time budget.
+func TestSchemaJobBoundedRetries(t *testing.T) {
+	g := gomega.NewWithT(t)
+	b, err := os.ReadFile("../../k8s/infrastructure/temporal.yaml")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	d := yaml.NewDecoder(bytes.NewReader(b))
+	found := 0
+	for {
+		var job struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+			Spec struct {
+				BackoffLimit          int `yaml:"backoffLimit"`
+				ActiveDeadlineSeconds int `yaml:"activeDeadlineSeconds"`
+				Template              struct {
+					Spec struct {
+						RestartPolicy string `yaml:"restartPolicy"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		}
+		err := d.Decode(&job)
+		if err == io.EOF {
+			break
+		}
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+		if job.Kind != "Job" || job.Metadata.Name != "temporal-schema" {
+			continue
+		}
+		found++
+		g.Expect(job.Spec.BackoffLimit).To(gomega.Equal(2), "permit two native retries after initial connection failure")
+		g.Expect(job.Spec.ActiveDeadlineSeconds).To(gomega.Equal(240), "keep the existing total Job deadline")
+		g.Expect(job.Spec.Template.Spec.RestartPolicy).To(gomega.Equal("Never"))
+	}
+	g.Expect(found).To(gomega.Equal(1))
+}
+
 func assertBlock(t *testing.T, n *yaml.Node) {
 	t.Helper()
 	if (n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode) && len(n.Content) > 0 && n.Style&yaml.FlowStyle != 0 {

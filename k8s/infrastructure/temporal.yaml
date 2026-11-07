@@ -255,7 +255,7 @@ metadata:
   labels:
     temporal-demo.io/phase: schema
 spec:
-  backoffLimit: 0
+  backoffLimit: 2
   activeDeadlineSeconds: 240
   template:
     spec:
