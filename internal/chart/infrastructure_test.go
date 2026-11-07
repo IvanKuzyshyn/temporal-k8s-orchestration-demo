@@ -12,15 +12,15 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Committed inputs and rendered Kyverno must contain complete usable resources
+// Committed inputs and rendered controllers must contain complete usable resources
 // (kind input is separate), pinned images/CRDs and Temporal's tested inputs.
 func TestInfrastructureAndBlockYAML(t *testing.T) {
 	g := gomega.NewWithT(t)
 	for _, file := range []string{"temporal", "keda", "kyverno"} {
 		b, err := os.ReadFile("../../k8s/infrastructure/" + file + ".yaml")
-		if file == "kyverno" {
+		if file != "temporal" {
 			g.Expect(os.IsNotExist(err)).To(gomega.BeTrue(), "generated bundle must not be committed")
-			cmd := exec.Command("bash", "scripts/render-kyverno.sh")
+			cmd := exec.Command("bash", "scripts/render-controller.sh", file)
 			cmd.Dir = "../.."
 			b, err = cmd.Output()
 		}
@@ -36,7 +36,7 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 				break
 			}
 			g.Expect(err).NotTo(gomega.HaveOccurred())
-			if file != "kyverno" {
+			if file == "temporal" {
 				assertBlock(t, &node)
 			}
 			var r resource
@@ -55,11 +55,17 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 				phase = map[string]string{"ConfigMap/postgres-init": "postgres", "ConfigMap/temporal-scripts": "postgres", "ConfigMap/temporal-config": "postgres", "Service/postgres": "postgres", "StatefulSet/postgres": "postgres", "Job/temporal-schema": "schema", "Service/temporal": "server", "Deployment/temporal": "server", "Job/temporal-namespace": "namespace-job", "Service/temporal-ui": "ui", "Deployment/temporal-ui": "ui"}[identity]
 			}
 			g.Expect(phase).NotTo(gomega.BeEmpty(), identity)
-			if file == "kyverno" {
+			if file == "keda" && r.Kind == "CustomResourceDefinition" {
+				g.Expect(r.Metadata.Labels["app.kubernetes.io/part-of"]).To(gomega.Equal("keda-operator"))
+				g.Expect(r.Metadata.Labels).NotTo(gomega.HaveKey("app.kubernetes.io/instance"), "native CRD selector must exclude controllers")
+			} else if file == "kyverno" {
 				g.Expect(r.Metadata.Labels["temporal-demo.io/phase"] == "crds").To(gomega.Equal(r.Kind == "CustomResourceDefinition"), identity)
 				g.Expect(r.Metadata.Labels["temporal-demo.io/phase"] == "namespace").To(gomega.Equal(r.Kind == "Namespace"), identity)
 			} else {
 				g.Expect(r.Metadata.Labels["temporal-demo.io/phase"]).To(gomega.Equal(phase), identity)
+			}
+			if file == "keda" && r.Kind != "Namespace" && r.Kind != "CustomResourceDefinition" {
+				g.Expect(r.Metadata.Labels["app.kubernetes.io/instance"]).To(gomega.Equal("keda"), "native CRD selector must exclude every controller")
 			}
 			g.Expect(r.Metadata.Annotations["helm.sh/hook"]).To(gomega.BeEmpty(), "Helm lifecycle hooks must not execute during apply")
 			if file != "temporal" && r.Kind == "Deployment" {
@@ -82,6 +88,16 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 			"temporal": {"Namespace/temporal", "StatefulSet/postgres", "Job/temporal-schema", "Job/temporal-namespace", "Deployment/temporal", "Deployment/temporal-ui"},
 			"keda":     {"Namespace/keda", "CustomResourceDefinition/scaledobjects.keda.sh", "Deployment/keda-operator", "Deployment/keda-operator-metrics-apiserver", "Deployment/keda-admission-webhooks"},
 			"kyverno":  {"Namespace/kyverno", "CustomResourceDefinition/clusterpolicies.kyverno.io", "Deployment/kyverno-admission-controller", "Deployment/kyverno-background-controller", "Deployment/kyverno-cleanup-controller", "Deployment/kyverno-reports-controller"},
+		}
+		if file == "keda" {
+			g.Expect(identities).To(gomega.HaveLen(30), "complete chart resources plus Namespace")
+			crds := 0
+			for id := range identities {
+				if strings.HasPrefix(id, "CustomResourceDefinition/") {
+					crds++
+				}
+			}
+			g.Expect(crds).To(gomega.Equal(6))
 		}
 		if file == "kyverno" {
 			g.Expect(identities).To(gomega.HaveLen(70), "include every upstream resource plus Namespace")

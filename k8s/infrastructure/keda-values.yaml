@@ -1,3 +1,6 @@
+# The chart applies these to controllers (including Pod templates), not CRDs.
+additionalLabels:
+  temporal-demo.io/phase: controller
 image:
   pullPolicy: IfNotPresent
   keda:

@@ -15,13 +15,17 @@ import (
 // the negative test green if the intended schema validation regresses.
 func TestControllerManifestsValidate(t *testing.T) {
 	g := gomega.NewWithT(t)
-	path := filepath.Join(t.TempDir(), "kyverno.yaml")
-	render := exec.Command("bash", "scripts/render-kyverno.sh")
-	render.Dir = "../.."
-	out, err := render.Output()
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	g.Expect(os.WriteFile(path, out, 0600)).To(gomega.Succeed())
-	cmd := exec.Command("bash", "../../scripts/validate-manifests.sh", "k8s/infrastructure/keda.yaml", path)
+	args := []string{"../../scripts/validate-manifests.sh"}
+	for _, controller := range []string{"keda", "kyverno"} {
+		path := filepath.Join(t.TempDir(), controller+".yaml")
+		render := exec.Command("bash", "scripts/render-controller.sh", controller)
+		render.Dir = "../.."
+		out, err := render.Output()
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+		g.Expect(os.WriteFile(path, out, 0600)).To(gomega.Succeed())
+		args = append(args, path)
+	}
+	cmd := exec.Command("bash", args...)
 	b, err := cmd.CombinedOutput()
 	g.Expect(err).NotTo(gomega.HaveOccurred(), string(b))
 	g.Expect(string(b)).To(gomega.ContainSubstring("Invalid: 0, Errors: 0, Skipped: 0"))

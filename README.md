@@ -101,10 +101,10 @@ mise run kind:diagnostics       # scoped status/app logs; failure-only credentia
 Infrastructure inputs live in `k8s/infrastructure/`:
 `kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
 PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
-`keda.yaml` contains complete pinned controllers/CRDs/RBAC. Kyverno's pinned
+KEDA and Kyverno's pinned charts provide complete controllers/CRDs/RBAC. Each
 chart is downloaded only on cache miss, SHA256-verified on **every** use, then
-rendered with `kyverno-values.yaml` and strictly validated before applying the
-same temporary manifest. Cold archive/schema caches require network access;
+rendered with its small `*-values.yaml` and strictly validated before applying
+the same temporary manifest. Both use `scripts/render-controller.sh keda|kyverno`. Cold archive/schema caches require network access;
 ordinary validation needs no live cluster.
 `k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
 Temporal readiness → completed default-namespace bootstrap → UI; then controller
