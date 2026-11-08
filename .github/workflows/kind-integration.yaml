@@ -40,17 +40,27 @@ jobs:
         shell: mise exec -- bash --noprofile --norc -eo pipefail {0}
         run: |
           export KUBECONFIG="$PWD/.local/kubeconfig"
-          kubectl --context kind-temporal-demo -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator 18080:8080 > .local/reset-forward.log 2>&1 &
+          kubectl --context kind-temporal-demo -n temporal-demo-orchestrator \
+            port-forward --address 127.0.0.1 service/orchestrator 18080:8080 \
+            >.local/reset-forward.log 2>&1 &
           pid=$!
-          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          trap '
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          ' EXIT
+
           ready=false
-          for ((i=0;i<60;i++)); do
-            if curl -fsS --max-time 2 http://127.0.0.1:18080/readyz >/dev/null 2>&1; then ready=true; break; fi
+          for ((i = 0; i < 60; i++)); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18080/readyz >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
             sleep 1
           done
           [[ $ready == true ]]
           id=$(jq -er .workflowId .local/history-before-reset.json)
-          code=$(curl -sS --max-time 10 -o .local/reset-result.json -w '%{http_code}' "http://127.0.0.1:18080/runs/$id")
+          code=$(curl -sS --max-time 10 -o .local/reset-result.json \
+            -w '%{http_code}' "http://127.0.0.1:18080/runs/$id")
           [[ $code == 404 ]]
           echo 'PASS: old workflow history is absent (404) after explicit cluster reset'
       - run: mise run test:kind-baseline

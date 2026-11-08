@@ -59,7 +59,9 @@ run = '''
 bash -euo pipefail -c '
 source scripts/kind-common.sh
 assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n temporal-demo-orchestrator port-forward --address 127.0.0.1 \
+  service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
 '
 '''
 
@@ -68,7 +70,9 @@ run = '''
 bash -euo pipefail -c '
 source scripts/kind-common.sh
 assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal port-forward --address 127.0.0.1 service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n temporal port-forward --address 127.0.0.1 \
+  service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
 '
 '''
 
