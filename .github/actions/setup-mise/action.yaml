@@ -1,5 +1,5 @@
 name: Setup mise
-description: Install pinned mise and all consumed Go/kind/Helm/schema tools
+description: Install pinned mise and consumed Go/kind/Helm/kubectl tools
 runs:
   using: composite
   steps:
