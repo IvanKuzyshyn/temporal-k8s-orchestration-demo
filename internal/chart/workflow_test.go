@@ -15,6 +15,15 @@ import (
 // unspecified shell uses -e, explicit bash also enables pipefail. A producer
 // failing after printing history must not become a successful CI step via tee.
 func TestKindWorkflowBaselinePropagatesFailure(t *testing.T) {
+	testKindWorkflowStep(t, "Baseline and retained-history identity", "test:kind-baseline", true)
+}
+
+func TestKindWorkflowValidationPropagatesFailure(t *testing.T) {
+	testKindWorkflowStep(t, "Real API validation acceptance", "test:kind-validation", false)
+}
+
+func testKindWorkflowStep(t *testing.T, name, task string, savesHistory bool) {
+	t.Helper()
 	g := gomega.NewWithT(t)
 	b, err := os.ReadFile("../../.github/workflows/kind-integration.yaml")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
@@ -26,7 +35,7 @@ func TestKindWorkflowBaselinePropagatesFailure(t *testing.T) {
 	g.Expect(yaml.Unmarshal(b, &workflow)).To(gomega.Succeed())
 	var run, shell string
 	for _, step := range workflow.Jobs["baseline-persistence"].Steps {
-		if step.Name == "Baseline and retained-history identity" {
+		if step.Name == name {
 			run, shell = step.Run, step.Shell
 		}
 	}
@@ -39,7 +48,7 @@ func TestKindWorkflowBaselinePropagatesFailure(t *testing.T) {
 				g.Expect(os.Mkdir(filepath.Join(root, dir), 0700)).To(gomega.Succeed())
 			}
 			const history = `{"workflowId":"fixture-history","runId":"fixture-run","status":"completed"}`
-			producer := "#!/bin/sh\n[ \"$*\" = 'run test:kind-baseline' ] || exit 99\nprintf '%s\\n' '" + history + "'\nexit \"$PRODUCER_EXIT\"\n"
+			producer := "#!/bin/sh\n[ \"$*\" = 'run " + task + "' ] || exit 99\nprintf '%s\\n' '" + history + "'\nexit \"$PRODUCER_EXIT\"\n"
 			g.Expect(os.WriteFile(filepath.Join(root, "tools/mise"), []byte(producer), 0755)).To(gomega.Succeed())
 			step := filepath.Join(root, "step.sh")
 			g.Expect(os.WriteFile(step, []byte(run), 0600)).To(gomega.Succeed())
@@ -57,6 +66,9 @@ func TestKindWorkflowBaselinePropagatesFailure(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			if exit == 0 {
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
+				if !savesHistory {
+					return
+				}
 				saved, err := os.ReadFile(filepath.Join(root, ".local/history-before-reset.json"))
 				g.Expect(err).NotTo(gomega.HaveOccurred())
 				g.Expect(string(saved)).To(gomega.Equal(history + "\n"))

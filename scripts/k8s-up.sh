@@ -13,11 +13,10 @@ work=$(mktemp -d)
 trap 'rc=$?; rm -rf "$work"; if ((rc!=0)); then bash scripts/kind-diagnostics.sh || true; fi; exit "$rc"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-# Render both controllers and strictly validate the same bytes before mutations.
+# Verify and render both pinned controllers before mutations; installation uses the API.
 for controller in keda kyverno; do
   bash scripts/render-controller.sh "$controller" > "$work/$controller.yaml"
 done
-bash scripts/validate-manifests.sh "$work/keda.yaml" "$work/kyverno.yaml"
 k wait --for=condition=Ready node/temporal-demo-control-plane --timeout=120s
 # Labels let kubectl apply ordinary manifests in explicit bootstrap phases.
 k apply -f k8s/infrastructure/temporal.yaml -f "$work/keda.yaml" -l temporal-demo.io/phase=namespace
@@ -79,7 +78,10 @@ docker build -f deploy/worker.Dockerfile -t "temporal-demo/worker:$tag" .
 kind load docker-image --name "$CLUSTER" "temporal-demo/orchestrator:$tag" "temporal-demo/worker:$tag"
 helm template temporal-demo k8s/worker-helm-chart -f k8s/worker-helm-chart/values-static.yaml --set-string "images.tag=$tag" --kube-version 1.35.8 > "$work/apps.yaml"
 go run ./cmd/validate-graph < "$work/apps.yaml"
-bash scripts/validate-manifests.sh "$work/apps.yaml"
+# Namespace creation is a prerequisite: dry-run Namespace creation does not persist it.
+# Graph failure must occur before even this application-bootstrap mutation.
+k apply -f "$work/apps.yaml" -l temporal-demo.io/phase=namespace
+bash scripts/validate-k8s.sh "$work/apps.yaml"
 # Apply exactly the validated bytes, not a second Helm render/release.
 k apply -f "$work/apps.yaml"
 k -n temporal-demo-orchestrator rollout status deployment/orchestrator --timeout=180s

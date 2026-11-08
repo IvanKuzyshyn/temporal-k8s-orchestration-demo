@@ -17,10 +17,14 @@ jobs:
           persist-credentials: false
           set-safe-directory: false
       - uses: ./.github/actions/setup-mise
-      - name: Cumulative Go, chart, complete graph, strict schemas and Compose configuration
+      - name: Cumulative Go, chart, complete graph and Compose configuration (no cluster)
         run: mise run validate
       - run: mise run k8s:up
       - run: mise run k8s:up
+      - run: mise run validate:k8s
+      - name: Real API validation acceptance
+        shell: bash
+        run: mise run test:kind-validation
       - name: Baseline and retained-history identity
         shell: bash
         run: |

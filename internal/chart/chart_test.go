@@ -90,6 +90,7 @@ func TestStaticRender(t *testing.T) {
 		}
 		g.Expect(err).NotTo(gomega.HaveOccurred())
 		g.Expect(r.Kind).NotTo(gomega.Equal("ScaledObject"))
+		g.Expect(r.Metadata.Labels["temporal-demo.io/phase"] == "namespace").To(gomega.Equal(r.Kind == "Namespace"), "bootstrap selector must select every Namespace and no workloads")
 		if r.Kind == "Namespace" {
 			namespaces[r.Metadata.Name] = r.Metadata.Labels["temporal-demo.io/worker-namespace"] == "true"
 			continue
@@ -168,15 +169,4 @@ func TestInvalidValuesFail(t *testing.T) {
 		g.Expect(err).To(gomega.HaveOccurred())
 		g.Expect(string(b)).To(gomega.ContainSubstring("duplicate worker identity"))
 	})
-}
-
-// Strict validation must reject unknown CRDs, not skip missing schemas.
-func TestUnknownKindFails(t *testing.T) {
-	g := gomega.NewWithT(t)
-	path := filepath.Join(t.TempDir(), "unknown.yaml")
-	g.Expect(os.WriteFile(path, []byte("apiVersion: imaginary.invalid/v1\nkind: Unknown\nmetadata:\n  name: must-fail\n  namespace: default\n"), 0600)).To(gomega.Succeed())
-	cmd := exec.Command("bash", "../../scripts/validate-manifests.sh", path)
-	b, err := cmd.CombinedOutput()
-	g.Expect(err).To(gomega.HaveOccurred())
-	g.Expect(string(b)).To(gomega.ContainSubstring("could not find schema"))
 }

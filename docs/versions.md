@@ -70,14 +70,14 @@ Task 5 checked upstream metadata before consuming the already-pinned
 - KEDA app **2.21.0**, chart **2.21.0**: <https://github.com/kedacore/keda/releases/tag/v2.21.0>, <https://kedacore.github.io/charts/index.yaml>. The [2.21 matrix](https://keda.sh/docs/2.21/operate/cluster/) lists Kubernetes 1.34–1.36, including selected 1.35. [Pinned scaler docs](https://keda.sh/docs/2.21/scalers/temporal/) support `queueTypes: "workflow,activity"`, activation threshold and optional `includeRunningWorkflowCount`. Running counts are visibility-based and not strict in-flight protection. [Release source](https://github.com/kedacore/keda/blob/v2.21.0/pkg/scalers/temporal_scaler.go) uses Temporal queue APIs; reliable backlog with zero pollers and this exact server pair **must still be tested** before discovery/scaling is combined.
 - Kyverno app **1.19.2**, chart **3.9.2**: <https://github.com/kyverno/kyverno/releases/tag/v1.19.2>, <https://github.com/kyverno/kyverno/blob/v1.19.2/charts/kyverno/Chart.yaml>, <https://kyverno.github.io/kyverno/index.yaml>. Chart Kubernetes constraint is >=1.25.0-0 (a declared minimum, not a tested-version guarantee). [Platform notes](https://kyverno.io/docs/installation/platform-notes/) and [generate lifecycle](https://kyverno.io/docs/policy-types/cluster-policy/generate/) are primary guidance. Synchronization, deletion of a source and a source no longer matching are distinct. Proposed synchronized per-Service generation plus existing-resource generation is **provisional**: Task 8 must prove create/update/delete/disable/remove/preexisting behavior against this release and choose explicit cleanup/source validation if necessary. Discovery must not be enabled without that proof.
 
-Task6 now consumes/pins kind0.33.0, Helm4.3.1, matching kubectl1.35.8 and kubeconform0.8.0 in `[tools]`, alongside unchanged Go1.27.3. Task4 verifies the Compose subset below; Task6 host Kubernetes/controller/PVC evidence is separate. Scaling and Kyverno lifecycle remain **unverified** until their assigned gates. Recheck selections when consumed; upstream release metadata can have timestamps later than the dated planning documents.
+Task6 consumes/pins kind0.33.0, Helm4.3.1 and matching kubectl1.35.8 in `[tools]`, alongside unchanged Go1.27.3. The former kubeconform pin is removed by the server-validation change described below. Task4 verifies the Compose subset below; Task6 host Kubernetes/controller/PVC evidence is separate. Scaling and Kyverno lifecycle remain **unverified** until their assigned gates. Recheck selections when consumed; upstream release metadata can have timestamps later than the dated planning documents.
 
 ## CI action provenance and review
 
 Resolved upstream release tags to commits through the GitHub commits API, then read `action.yml` at each exact commit before selecting inputs:
 
 - `actions/checkout` **v7.0.1**, `3d3c42e5aac5ba805825da76410c181273ba90b1`: <https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml>. Node 24; disable credential persistence and global safe-directory modification.
-- The local composite action `.github/actions/setup-mise/action.yaml` wraps `jdx/mise-action` **v5.2.2**, `8418fedb1110381a0d3ba51a7a415d7c1b884550`, unchanged; workflows call `./.github/actions/setup-mise` after checkout: <https://github.com/jdx/mise-action/blob/8418fedb1110381a0d3ba51a7a415d7c1b884550/action.yml>. Node 24; exact mise version, all consumed repository tools installed consistently (Go/kind/Helm/kubectl/kubeconform), cache disabled, no persisted token or OIDC. Download verification is described by the action; bundled JavaScript is not independently audited here.
+- The local composite action `.github/actions/setup-mise/action.yaml` wraps `jdx/mise-action` **v5.2.2**, `8418fedb1110381a0d3ba51a7a415d7c1b884550`, unchanged; workflows call `./.github/actions/setup-mise` after checkout: <https://github.com/jdx/mise-action/blob/8418fedb1110381a0d3ba51a7a415d7c1b884550/action.yml>. Node 24; exact mise version, all consumed repository tools installed consistently (Go/kind/Helm/kubectl), cache disabled, no persisted token or OIDC. Download verification is described by the action; bundled JavaScript is not independently audited here.
 
 CI uses read-only contents permissions, `pull_request` (not `pull_request_target`), a bounded timeout, and the exact local `mise run validate` command. Linux amd64 CI is configured, **not executed by this local task**; the controller must observe its result after opening the PR. Local verification evidence is recorded in the Task 1 report.
 
@@ -146,7 +146,11 @@ retrieved logs in this implementer session. Fix round1 (fatal lifecycle, cleanup
 failure propagation and elapsed smoke budgets) requires fresh CI observation;
 its host rerun evidence is in task-4-report.md. Task6 host Kubernetes evidence follows; scaler/policy lifecycle gates remain open.
 
-## Task 6 consumed kind tools, charts, schemas and host evidence
+## Task 6 consumed kind tools, charts, schemas and host evidence (historical)
+
+This section records earlier schema-based evidence, not execution of the new API
+acceptance. Local Kubernetes schemas/exporter/kubeconform have since been removed;
+Helm values.schema.json and Temporal SQL schema migrations are unchanged.
 
 Consumed **2026-10-30 UTC**, Darwin ARM64 host / Docker Linux aarch64,
 12CPUs/~7.75GiB VM. Existing Compose and unrelated three-node kind were left
@@ -189,7 +193,7 @@ multi-platform digests unchanged; PostgreSQL plugin postgres12, schemas1.19/1.14
   `yannh/kubernetes-json-schema` revision
   `47163ead3738a996c3e30be9691bb37b8071d9d3`. Required ScaledObject/ClusterPolicy
   schemas are extracted from the **exact selected chart releases**, committed
-  locally; see `k8s/schemas/README.md`. A sampled pinned CRD catalog differed from
+  locally (the former schema provenance directory is now removed). A sampled pinned CRD catalog differed from
   those release schemas and was deliberately not consumed. Known invalid custom
   fields and an unknown-kind fixture fail; no missing-schema skip is used.
   Validation-only custom fixtures are never deployed.
@@ -245,8 +249,8 @@ commands: `.superpowers/sdd/2026-10-30-pr8-simple-k8s/task-1-report.md`.
 Complete controller resources join strict manifest validation (originally vendored;
 now rendered from both checksum-pinned charts). The pinned
 core catalog lacks the CRD-definition model; its standalone strict schema now
-comes from Kubernetes1.35.8's exact Swagger release commit (provenance and
-reproduction in `k8s/schemas/README.md`). Focused validation reports **130 valid,
+came from Kubernetes1.35.8's exact Swagger release commit (that local schema
+machinery is now removed). Historical focused validation reported **130 valid,
 0 invalid/errors/skipped** and rejects unknown kinds. Helm's icon recommendation
 is informational; upstream Kyverno policy-API deprecation/schema warnings, if
 emitted by Kubernetes, are not suppressed. These do not prove scaling or policy
@@ -255,3 +259,31 @@ lifecycle behavior.
 Disposable Linux CI is configured to run up twice, baseline/persistence, explicit
 down/down/up, old-history404 and a fresh diamond. **No latest-head Linux CI result
 is claimed here**; the controller observes that separate gate.
+
+## PR8 actual API server validation follow-up
+
+The active tool pins remain Go1.27.3, kind0.33.0, kubectl1.35.8 and Helm4.3.1;
+kubeconform and local Kubernetes JSON-schema extraction/catalog/cache logic are
+removed. No chart, image, PostgreSQL schema migration or retry pin changed.
+Fast `validate` retains Go/race/vet, Helm lint/values schema, full graph and Compose
+configuration; it passed uncached with `KUBECONFIG=/dev/null` and an unusable
+`DOCKER_HOST`. An initial run exposed one obsolete offline unknown-kind test;
+it was removed in favor of real API acceptance, then validation passed.
+
+On the retained Darwin ARM64 host cluster, new up passed twice sequentially.
+Startup waits for infrastructure/CRDs/controllers/webhooks, graph-checks before
+application Namespace bootstrap, then strict server-dry-runs and applies the same
+artifact. Standalone `validate:k8s`, real `test:kind-validation` and baseline
+passed. All three positive native/KEDA/Kyverno controls passed before wrong-type
+negatives; API errors named replicas, maxReplicaCount and spec.rules[0].name.
+An unknown kind failed; no fixtures, policies or scalers persisted. Kyverno's
+ClusterPolicy deprecation warning and KEDA's secondary invalid-object diagnostic
+are retained, not suppressed. This is not proof of later scaling/policy lifecycle.
+
+The captured prior completed history remained byte-identical after both up runs
+and baseline. PVC UID/bound volume, immutable Secret UID/resourceVersion/password
+hash, global kubeconfig hash and running container IDs stayed unchanged. No
+local down/reset occurred; baseline's owned forwards were cleaned up. Evidence:
+`.superpowers/sdd/kind-server-validation/task-1-report.md`. Previous Linux results
+above describe earlier changes only; fresh new-head Linux CI is controller-owned
+and is not claimed here.

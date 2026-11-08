@@ -258,7 +258,7 @@ The timing budget for the smoke test must account for controller reconciliation,
 - Kyverno policy tests plus real-cluster lifecycle tests for create/update/delete/annotation removal and preexisting resources. Verify existing invalid registrations cannot start workflows even though admission enforcement is not retroactive.
 - CI/pre-deployment graph validation against the complete rendered worker manifest set, with fixtures for missing dependencies, two-node cycles, and longer cycles. Reuse the orchestrator's Go graph validator where possible.
 - Registry/API integration tests proving partial reconciliation and invalid graphs resulting from concurrent changes block new starts before Temporal is called.
-- Manifest validation against pinned CRD schemas; basic formatting, lint, and image-build checks.
+- Fast cluster-independent Go/Helm values-schema/complete-graph checks; Kubernetes native and custom-resource validation against the actual owned kind API/admission after infrastructure readiness. Graph-check the single application render before Namespace bootstrap; persist labeled Namespaces, strict server-dry-run then apply the same bytes. Standalone validation never bootstraps. Real positive/one-field-negative/unknown-kind fixtures remain unpersisted. No local Kubernetes JSON-schema catalogs/exporter/kubeconform. Basic formatting, lint, and image-build checks remain.
 - Kind smoke test for zero-to-one activation, dependency order, successful completion, and return to zero.
 - Resilience experiments: stop a worker during an activity, exercise delayed retries, restart the orchestrator during a run, and make Temporal temporarily unavailable.
 

@@ -15,7 +15,7 @@ import (
 
 // Real script + real Helm render, with only external runtime/build boundaries
 // replaced. Reordering waits, rotating an existing Secret, applying a different
-// render, or continuing after failed schemas must be observable failures.
+// render, or continuing after failed server validation must be observable failures.
 func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 	// Populate/verify the real archive even when this test runs alone on CI.
 	for _, controller := range []string{"keda", "kyverno"} {
@@ -25,14 +25,14 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 		gomega.NewWithT(t).Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 	}
 	for _, controller := range []string{"keda", "kyverno"} {
-		for _, scenario := range []string{"rerun", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "invalid controller schema"} {
+		for _, scenario := range []string{"rerun", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "failed validation", "failed graph"} {
 			t.Run(controller+"/"+scenario, func(t *testing.T) {
 				g := gomega.NewWithT(t)
 				root := t.TempDir()
 				for _, dir := range []string{"scripts", "tools", ".local"} {
 					g.Expect(os.MkdirAll(filepath.Join(root, dir), 0700)).To(gomega.Succeed())
 				}
-				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-manifests.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq"} {
+				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq"} {
 					b, err := os.ReadFile("../../" + path)
 					g.Expect(err).NotTo(gomega.HaveOccurred(), "direct rerunnable up entrypoint")
 					g.Expect(os.WriteFile(filepath.Join(root, path), b, 0600)).To(gomega.Succeed())
@@ -58,20 +58,16 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 				g.Expect(err).NotTo(gomega.HaveOccurred())
 				tools := map[string]string{
 					"curl": `exit 42`,
-					"helm": `if [[ $SCENARIO == 'template failure' && $* == *"template $CONTROLLER"* ]]; then exit 43; fi
+					"helm": `if [[ $* == *'template temporal-demo '* ]]; then echo render-apps >> "$STATE/calls"; fi
+if [[ $SCENARIO == 'template failure' && $* == *"template $CONTROLLER"* ]]; then exit 43; fi
 exec "` + realHelm + `" "$@"`,
-					"git":    `case "$1" in rev-parse) echo abc123456789;; status) :;; *) exit 91;; esac`,
-					"docker": `[[ $1 == build ]] || exit 92; echo build >> "$STATE/calls"`,
-					"kind":   `case "$1 $2" in 'get clusters') echo temporal-demo;; 'load docker-image') echo load >> "$STATE/calls";; *) exit 93;; esac`,
-					"go":     `cat > "$STATE/graph.yaml"`,
-					"kubeconform": `for arg in "$@"; do
-for name in keda kyverno; do
-if [[ $arg == */$name.yaml ]]; then
- [[ $name != "$CONTROLLER" || $SCENARIO != 'invalid controller schema' ]] || exit 44
- cp "$arg" "$STATE/validated-$name.yaml"; echo validate-$name >> "$STATE/calls"; fi
-done
-if [[ $arg == */apps.yaml ]]; then cmp "$arg" "$STATE/graph.yaml"; cp "$arg" "$STATE/validated.yaml"; echo validate-apps >> "$STATE/calls"; fi; done`,
-					"kubectl": `while [[ $1 == --* ]]; do case "$1" in --*=*) shift;; *) shift 2;; esac; done
+					"git":         `case "$1" in rev-parse) echo abc123456789;; status) :;; *) exit 91;; esac`,
+					"docker":      `[[ $1 == build ]] || exit 92; echo build >> "$STATE/calls"`,
+					"kind":        `case "$1 $2" in 'get clusters') echo temporal-demo;; 'load docker-image') echo load >> "$STATE/calls";; *) exit 93;; esac`,
+					"go":          `cat > "$STATE/graph.yaml"; echo graph >> "$STATE/calls"; [[ $SCENARIO != 'failed graph' ]]`,
+					"kubeconform": `echo 'offline validator must not run' >&2; exit 99`,
+					"kubectl": `[[ $* == *'--kubeconfig '* && $* == *'--context kind-temporal-demo'* || $* == *'config current-context'* ]] || exit 97
+while [[ $1 == --* ]]; do case "$1" in --*=*) shift;; *) shift 2;; esac; done
 if [[ $1 == config ]]; then echo kind-temporal-demo; exit; fi
 printf '%s\n' "$*" >> "$STATE/calls"
 if [[ $1 == get && $* == *validatingwebhookconfigurations* ]]; then
@@ -88,7 +84,6 @@ if [[ $SCENARIO == 'failed schema' && $* == *'wait --for=condition=complete job/
 if [[ $1 == apply ]]; then
  for name in keda kyverno; do
  for arg in "$@"; do if [[ $arg == */$name.yaml ]]; then
-  cmp "$arg" "$STATE/validated-$name.yaml"
   [[ $* != *--force-conflicts* ]] || exit 94
   case "$*" in
    *' -l temporal-demo.io/phase=namespace') echo apply-$name-namespace >> "$STATE/calls";;
@@ -99,7 +94,18 @@ if [[ $1 == apply ]]; then
   esac
  fi; done
  done
- for arg in "$@"; do if [[ $arg == */apps.yaml ]]; then cmp "$arg" "$STATE/validated.yaml"; cp "$arg" "$STATE/applied.yaml"; echo apply-apps >> "$STATE/calls"; fi; done
+ for arg in "$@"; do if [[ $arg == */apps.yaml ]]; then
+  cmp "$arg" "$STATE/graph.yaml"
+  if [[ $* == *'-l temporal-demo.io/phase=namespace'* ]]; then
+   echo bootstrap-apps >> "$STATE/calls"
+  elif [[ $* == *'--dry-run=server'* ]]; then
+   [[ $* == *'--validate=strict'* ]] || exit 98
+   [[ $SCENARIO != 'failed validation' ]] || exit 44
+   cp "$arg" "$STATE/validated.yaml"; echo validate-apps >> "$STATE/calls"
+  else
+   cmp "$arg" "$STATE/validated.yaml"; cp "$arg" "$STATE/applied.yaml"; echo apply-apps >> "$STATE/calls"
+  fi
+ fi; done
 fi`,
 				}
 				for name, body := range tools {
@@ -113,7 +119,7 @@ fi`,
 				out, err := run()
 				calls, _ := os.ReadFile(filepath.Join(root, "calls"))
 				text := string(calls)
-				if scenario == "template failure" || scenario == "download failure" || scenario == "tampered cache" || scenario == "invalid controller schema" {
+				if scenario == "template failure" || scenario == "download failure" || scenario == "tampered cache" {
 					g.Expect(err).To(gomega.HaveOccurred(), string(out))
 					g.Expect(text).NotTo(gomega.ContainSubstring("apply "), "render failure must stop deployment")
 					return
@@ -131,14 +137,23 @@ fi`,
 					g.Expect(text).NotTo(gomega.ContainSubstring("build\n"))
 					return
 				}
+				if scenario == "failed validation" || scenario == "failed graph" {
+					g.Expect(err).To(gomega.HaveOccurred(), string(out))
+					g.Expect(text).NotTo(gomega.ContainSubstring("apply-apps"))
+					if scenario == "failed graph" {
+						g.Expect(text).NotTo(gomega.ContainSubstring("bootstrap-apps"))
+					}
+					return
+				}
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out)+"\n"+text)
 				out, err = run()
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 				calls, _ = os.ReadFile(filepath.Join(root, "calls"))
 				text = string(calls)
+				g.Expect(strings.Count(text, "render-apps\n")).To(gomega.Equal(2), "exactly one application render per up")
 				g.Expect(text).NotTo(gomega.ContainSubstring("create secret"))
 				g.Expect(text).NotTo(gomega.ContainSubstring("delete cluster"))
-				stages := []string{"validate-keda", "validate-kyverno", "apply-keda-namespace", "apply-kyverno-namespace", "phase=postgres", "rollout status statefulset/postgres", "phase=schema", "wait --for=condition=complete job/temporal-schema", "phase=server", "rollout status deployment/temporal ", "phase=namespace-job", "wait --for=condition=complete job/temporal-namespace", "phase=ui", "apply-keda-crds", "apply-kyverno-crds", "wait --for=condition=Established crd -l app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance", "wait --for=condition=Established crd -l temporal-demo.io/phase=crds", "apply-keda-controllers", "apply-kyverno-controllers", "build\n", "load\n", "validate-apps", "apply-apps", "rollout status deployment/orchestrator"}
+				stages := []string{"apply-keda-namespace", "apply-kyverno-namespace", "phase=postgres", "rollout status statefulset/postgres", "phase=schema", "wait --for=condition=complete job/temporal-schema", "phase=server", "rollout status deployment/temporal ", "phase=namespace-job", "wait --for=condition=complete job/temporal-namespace", "phase=ui", "apply-keda-crds", "apply-kyverno-crds", "wait --for=condition=Established crd -l app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance", "wait --for=condition=Established crd -l temporal-demo.io/phase=crds", "apply-keda-controllers", "apply-kyverno-controllers", "rollout status deployment/keda-admission-webhooks", "rollout status deployment/kyverno-reports-controller", "get validatingwebhookconfigurations,mutatingwebhookconfigurations", "build\n", "load\n", "graph\n", "bootstrap-apps", "validate-apps", "apply-apps", "rollout status deployment/orchestrator"}
 				pos := 0
 				for _, stage := range stages {
 					idx := strings.Index(text[pos:], stage)

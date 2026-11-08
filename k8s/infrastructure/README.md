@@ -8,8 +8,8 @@
   upstream charts. Complete generated controllers/RBAC/CRDs are temporary, not
   committed. No scaling/admission policies are added.
 
-`bash scripts/k8s-up.sh` renders both controllers once and strictly validates
-those artifacts before resource mutations. Native kubectl label selectors apply
+`bash scripts/k8s-up.sh` verifies and renders both controllers once before
+resource mutations. Their actual installation provides API validation. Native kubectl label selectors apply
 Namespaces, CRDs and controller resources from **those same files**. Kyverno's
 both CRD subcharts receive `temporal-demo.io/phase=crds` through supported values.
 KEDA 2.21.0 supports `additionalLabels` for controllers (including Pod templates),
@@ -40,14 +40,14 @@ Pinned Helm **4.3.1**, Kubernetes render version **1.35.8**:
   `f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e`.
 
 `versions.env` locks archive bytes. All deployed controller/init image digests
-are unchanged. Startup, ordinary Go tests and cumulative offline schema validation
+are unchanged. Startup, ordinary Go tests and cumulative fast validation
 share `scripts/render-controller.sh keda|kyverno`, a fixed two-controller selector,
 not a generic chart framework. On cache miss it downloads only the exact upstream
 archive with finite connect/total/retry limits, verifies SHA256, then stores it in
 ignored `.local/charts`. **Every cached use rechecks SHA256**; a mismatch fails
-rather than silently replacing bytes. A warm archive/schema cache allows validation
-without network; a cold cache requires upstream access. Neither rendering nor
-strict schema validation needs a live cluster.
+rather than silently replacing bytes. A warm archive cache allows fast validation
+without network; a cold cache requires upstream access. Rendering, Helm lint and
+graph validation need no live cluster or Docker daemon.
 
 From the repository root:
 
@@ -80,9 +80,19 @@ PVC deletion or Secret update is needed. Legacy Helm records/completed hook Jobs
 may remain inert; **do not run Helm upgrade or uninstall against this now
 kubectl-managed demo**. `k8s:down` is the explicit destructive cluster/history reset.
 
-Strict validation covers every generated KEDA and Kyverno resource, including
-CRD definitions. The pinned core catalog omits the CRD-definition schema, so its
-strict standalone schema is derived from Kubernetes **1.35.8**; see
-[schemas/provenance](../schemas/README.md). Custom instances use exact
-release-derived schemas, which remain committed. Unknown kinds fail; no upstream
-resources are skipped.
+Infrastructure installation validates resources against Kubernetes **1.35.8**.
+After CRDs, controllers and webhook CAs are ready, startup renders applications
+once and validates the complete graph before any application-bootstrap mutation.
+It applies only chart Namespaces via `temporal-demo.io/phase=namespace`, then
+runs strict server dry-run against the actual desired artifact and applies the
+same bytes only on success. Persisted Namespaces are a prerequisite, not a claim
+that startup validation is wholly mutation-free.
+
+`mise run validate:k8s` requires the already ready owned cluster, application
+Namespaces and CRDs; it never installs or bootstraps them. It explicitly uses the
+worktree kubeconfig and `kind-temporal-demo`, with no client-validation fallback.
+`mise run test:kind-validation` exercises valid native/ScaledObject/ClusterPolicy
+controls first, rejects one-field wrong-type variants and an unknown kind, and
+checks controls were not persisted. CI runs these after up; baseline stays static
+replicas1 without active policies/scalers. Local Kubernetes schemas/exporter and
+kubeconform are removed; Helm values schema and Temporal SQL migrations remain.

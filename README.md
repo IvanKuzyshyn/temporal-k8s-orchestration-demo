@@ -13,7 +13,7 @@ zero-to-one scaling remain later stages.
   Linux containers, roughly 8 GB available memory and 4+ CPUs recommended.
 - [mise](https://mise.jdx.dev/), Git, Bash, curl, jq and OpenSSL on the host.
 - `mise install` installs pinned Go1.27.3, kind0.33.0, kubectl1.35.8,
-  Helm4.3.1 and kubeconform0.8.0, without changing global tool configuration.
+  Helm4.3.1, without changing global tool configuration.
   Race tests need a C compiler
   (Xcode command-line tools on macOS; GCC on Linux).
 
@@ -27,7 +27,7 @@ No SQLite, Temporal dev server, hosted Temporal, or auto-setup image is used.
 
 ```sh
 mise install
-mise run validate              # Go/race/vet, Helm, full graph, strict schemas, Compose config
+mise run validate              # Go/race/vet, Helm, full graph, Compose config; no cluster/daemon
 mise run compose:up            # builds BOTH app images, waits for all services
 mise run compose:smoke         # real diamond + completed/restarted keyed replay + body400
 mise run compose:persistence   # isolated restart/replacement/schema/down-up/reset proof
@@ -66,8 +66,10 @@ From **this checkout**, with Docker running:
 
 ```sh
 mise install
-mise run validate:manifests     # no cluster: Helm lint/render, complete graph, strict schemas
+mise run validate:manifests     # no cluster: Helm lint/render, complete graph
 mise run k8s:up                # create if absent, apply infrastructure, build/load/validate/apply apps
+mise run validate:k8s          # strict API dry-run; requires already ready owned cluster/Namespaces/CRDs
+mise run test:kind-validation   # real valid/invalid API controls; verifies nothing persisted
 mise run test:kind-baseline     # diamond + Kubernetes-only orchestrator restart/keyed replay
 mise run test:kind-persistence  # replace Temporal/PG Pods + safe schema rerun, retain history
 mise run validate              # same cumulative command used by all PR workflows
@@ -103,16 +105,22 @@ Infrastructure inputs live in `k8s/infrastructure/`:
 PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
 KEDA and Kyverno's pinned charts provide complete controllers/CRDs/RBAC. Each
 chart is downloaded only on cache miss, SHA256-verified on **every** use, then
-rendered with its small `*-values.yaml` and strictly validated before applying
-the same temporary manifest. Both use `scripts/render-controller.sh keda|kyverno`. Cold archive/schema caches require network access;
-ordinary validation needs no live cluster.
+rendered with its small `*-values.yaml`; the API validates infrastructure during
+installation from the same temporary manifest. Both use
+`scripts/render-controller.sh keda|kyverno`. Cold chart caches require network
+access; fast validation needs no live cluster or Docker daemon.
 `k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
 Temporal readiness → completed default-namespace bootstrap → UI; then controller
 CRDs (server-side apply), establishment and controllers/webhook CAs. Bootstrap
 Jobs are recreated on reruns, not databases/storage. Both images are built directly
 with Docker, tagged with the source revision (plus a unique dirty suffix), loaded
-into kind, and the **same rendered bytes** pass complete-graph/strict-schema
-validation before kubectl apply. Helm only renders; it no longer installs releases.
+into kind. Applications render once: complete graph validation runs before any
+application-bootstrap mutation, then labeled application Namespaces are applied
+as a prerequisite (dry-run Namespace creation does not persist them). The
+**same rendered bytes** pass `kubectl apply --dry-run=server --validate=strict`
+using the owned kubeconfig/context before workload apply. Validation failure stops
+workload mutation; up is not entirely mutation-free. Helm only renders; it does
+not install releases.
 See [render provenance and reproduction](k8s/infrastructure/README.md), including
 migration from the prior Helm-managed baseline and excluded Helm lifecycle hooks.
 
@@ -182,12 +190,17 @@ and multiple workers in one namespace. This is **graph/source validation**, not 
 general Kubernetes/CRD schema check, admission test, or proof of runnable workers.
 No cluster or Docker runtime is needed. `mise run validate:manifests` additionally
 runs actual Helm lint/render, the CLI over the **complete** application render,
-and kubeconform strict Kubernetes1.35.8 plus release-pinned custom schemas.
-Unknown kinds fail (a negative fixture proves it); no missing-schema skip is used.
-Custom-schema fixtures are validation-only, never deployed. Core schemas use an
-immutable upstream revision; selected CRD schemas are extracted from exact
-hash-verified chart releases; see [schema provenance](k8s/schemas/README.md).
-These checks are included additively in cumulative `mise run validate`.
+and verifies/renders both pinned controller charts. These fast checks are included
+in cumulative `mise run validate`. Helm's `values.schema.json` remains enforced.
+Kubernetes structural/custom-resource validation belongs to the actual kind API
+and admission webhooks, not a local downloaded JSON-schema catalog.
+`validate:k8s` only validates against an already ready owned cluster: it never
+creates, resets, installs or bootstraps anything. Missing cluster, Namespaces or
+CRDs fail. Kind CI runs it and `test:kind-validation` after startup readiness.
+The latter first accepts valid native Deployment, KEDA ScaledObject and Kyverno
+ClusterPolicy controls, then rejects wrong field types and an unknown kind;
+all fixtures are dry-run only and checked absent. No active scaler or policy is
+installed. These checks do not prove later scaling or policy lifecycle behavior.
 
 ## Lifecycle, history and destructive reset
 
