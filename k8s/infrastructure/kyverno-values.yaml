@@ -1,0 +1,56 @@
+# Bootstrap selectors for both CRD subcharts; keep large CRDs on SSA.
+crds:
+  customLabels:
+    temporal-demo.io/phase: crds
+kyverno-api:
+  labels:
+    temporal-demo.io/phase: crds
+# Single replicas for a local baseline, not production HA.
+admissionController:
+  replicas: 1
+  initContainer:
+    image:
+      tag: v1.19.2@sha256:27f3cc52e628559b56d08363b85316819802086c9808606914f7805a244148f4
+  container:
+    image:
+      tag: v1.19.2@sha256:c8c4dd09e720d2cd7fd24ca73ac28e46651001372f988e0cba3f2f612f04b955
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: "1"
+        memory: 384Mi
+backgroundController:
+  replicas: 1
+  image:
+    tag: v1.19.2@sha256:c46e124f21ef8a6bb4b48de57106808b1007edcd5ddd4ff7df5d23b9efa60ce2
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+cleanupController:
+  replicas: 1
+  image:
+    tag: v1.19.2@sha256:d7340aa7c9315080c3dafa7b765d090ced37353e89e5cd7a3f9ac69e8fb532b2
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+reportsController:
+  replicas: 1
+  image:
+    tag: v1.19.2@sha256:5fb6d3e738050dbce84f60ecabaede7665fbe0578d07c1e8c912443b035e79c3
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi

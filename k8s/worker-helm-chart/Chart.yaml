@@ -1,0 +1,5 @@
+apiVersion: v2
+name: temporal-demo
+version: 0.1.0
+description: Fixed-replica Temporal diamond (no discovery or scaling)
+type: application

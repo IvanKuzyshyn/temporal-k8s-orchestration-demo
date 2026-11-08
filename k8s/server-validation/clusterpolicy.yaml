@@ -1,0 +1,18 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: api-validation-control
+spec:
+  background: false
+  rules:
+    - name: valid-rule
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: validation control only; never persisted
+        pattern:
+          metadata:
+            name: api-validation-control

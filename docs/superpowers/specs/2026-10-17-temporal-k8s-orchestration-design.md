@@ -199,10 +199,9 @@ Kind is the authoritative integration environment. Start with one node, preload 
 ```text
 .github/workflows/       Go and manifest/policy validation
 k8s/
-  kind/                  Cluster configuration
-  infrastructure/        Temporal, KEDA, Kyverno configuration
+  infrastructure/        kind input; Temporal manifest; pinned KEDA/Kyverno chart values
   policies/              Registration generation and validation
-  apps/                  Orchestrator and worker resources
+  worker-helm-chart/     Orchestrator and worker Helm templates/values
 services/
   orchestrator/          chi API, registry adapters, parent workflow
   worker/                Worker process, child workflow, activity
@@ -223,7 +222,7 @@ go.mod
 go.sum
 ```
 
-Use mise tasks to create/delete the cluster, install infrastructure, build/load images, deploy applications, port-forward, run tests, and run the smoke scenario. Installation must wait for CRDs, controllers, admission webhooks, PostgreSQL readiness, default/visibility schema setup, and Temporal namespace readiness before applying dependent resources. Schema jobs must be repeatable, version-pinned, and complete before starting Temporal. Keep database credentials in local Secrets/environment files, not committed manifests.
+Use `mise run k8s:up` to create the named cluster if absent, apply per-component plain infrastructure YAML, build/load images, validate the exact application render and apply it. `mise run k8s:down` explicitly deletes the demo cluster and its history. Keep port-forward, validation and integration-test tasks independent; do not add granular provisioning wrappers. This layout/lifecycle supersedes the original fragmented Task 6 provisioning approach (approved PR8 simplification, 2026-10-30). Installation must wait for CRDs, controllers, admission webhooks, PostgreSQL readiness, default/visibility schema setup, and Temporal namespace readiness before applying dependent resources. Schema jobs must be repeatable, version-pinned, and complete before starting Temporal. Keep database credentials in local Secrets/environment files, not committed manifests.
 
 Document both a quick-start path and teardown. PostgreSQL volume/PVC storage preserves history across Temporal and database Pod/container replacement. Compose down preserves named volumes; explicit reset deletes them. Deleting the kind cluster deletes its local PVC data; this is not host-external backup. Verify persistence and document destructive operations. Keep secrets and local state out of Git. Restrict local endpoints to localhost; production authentication is not part of this demo.
 
@@ -259,7 +258,7 @@ The timing budget for the smoke test must account for controller reconciliation,
 - Kyverno policy tests plus real-cluster lifecycle tests for create/update/delete/annotation removal and preexisting resources. Verify existing invalid registrations cannot start workflows even though admission enforcement is not retroactive.
 - CI/pre-deployment graph validation against the complete rendered worker manifest set, with fixtures for missing dependencies, two-node cycles, and longer cycles. Reuse the orchestrator's Go graph validator where possible.
 - Registry/API integration tests proving partial reconciliation and invalid graphs resulting from concurrent changes block new starts before Temporal is called.
-- Manifest validation against pinned CRD schemas; basic formatting, lint, and image-build checks.
+- Fast cluster-independent Go/Helm values-schema/complete-graph checks; Kubernetes native and custom-resource validation against the actual owned kind API/admission after infrastructure readiness. Graph-check the single application render before Namespace bootstrap; persist labeled Namespaces, strict server-dry-run then apply the same bytes. Standalone validation never bootstraps. Real positive/one-field-negative/unknown-kind fixtures remain unpersisted. No local Kubernetes JSON-schema catalogs/exporter/kubeconform. Basic formatting, lint, and image-build checks remain.
 - Kind smoke test for zero-to-one activation, dependency order, successful completion, and return to zero.
 - Resilience experiments: stop a worker during an activity, exercise delayed retries, restart the orchestrator during a run, and make Temporal temporarily unavailable.
 

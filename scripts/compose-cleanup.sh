@@ -28,8 +28,9 @@ if [[ -n $fixtures ]]; then
       echo "Fixture cleanup failed: $project" >&2
       status=1
     fi
-  done <<< "$fixtures"
+  done <<<"$fixtures"
 fi
+
 # Attempt this even after failed discovery or any failed fixture reset.
 if ! COMPOSE_PROJECT_NAME="$job" RESET_CONFIRM=1 bash scripts/compose.sh reset; then
   echo "Normal job cleanup failed: $job" >&2

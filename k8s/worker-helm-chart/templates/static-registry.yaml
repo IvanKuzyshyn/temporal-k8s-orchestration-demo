@@ -1,0 +1,11 @@
+{{- $registrations := list }}
+{{- range .Values.workers }}
+{{- $registrations = append $registrations (dict "schemaVersion" "1" "workerName" .name "taskQueue" (printf "%s.v1.temporal" .name) "workflowType" "ExampleChildWorkflow" "runAfter" .runAfter "sourceServiceName" .name "sourceServiceNamespace" (printf "temporal-demo-%s" .name) "sourceServiceUID" "") }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: static-registry
+  namespace: temporal-demo-orchestrator
+data:
+  workers.json: {{ $registrations | toJson | quote }}

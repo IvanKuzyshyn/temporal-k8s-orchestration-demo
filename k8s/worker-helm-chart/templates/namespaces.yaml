@@ -1,0 +1,19 @@
+{{- $seen := dict }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-orchestrator
+  labels:
+    temporal-demo.io/phase: namespace
+{{- range .Values.workers }}
+{{- if hasKey $seen .name }}{{ fail (printf "duplicate worker identity: %s" .name) }}{{ end }}
+{{- $_ := set $seen .name true }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal-demo-{{ .name }}
+  labels:
+    temporal-demo.io/phase: namespace
+    temporal-demo.io/worker-namespace: "true"
+{{- end }}
