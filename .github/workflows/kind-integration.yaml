@@ -31,6 +31,10 @@ jobs:
           mise run test:kind-baseline | tee .local/ci-baseline.log
           grep -F '{"workflowId":' .local/ci-baseline.log > .local/history-before-reset.json
       - run: mise run test:kind-persistence
+      - name: Kyverno admission and native registration lifecycle
+        run: |
+          mise run policies:install
+          mise run test:policies-integration
       - name: Native Temporal activation, completion, zero and delayed activity retry
         env:
           # Long interruption is required locally and included on manual dispatch.

@@ -1,0 +1,41 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: temporal-generate-registrations
+  labels:
+    app.kubernetes.io/part-of: temporal-worker-discovery
+spec:
+  background: true
+  rules:
+    - name: register-worker
+      match:
+        any:
+          - resources:
+              kinds:
+                - v1/Service
+              namespaceSelector:
+                matchLabels:
+                  temporal-demo.io/worker-namespace: "true"
+              annotations:
+                temporal-worker: "true"
+      generate:
+        generateExisting: true
+        synchronize: true
+        orphanDownstreamOnPolicyDelete: false
+        apiVersion: v1
+        kind: ConfigMap
+        name: temporal-worker-{{ request.object.metadata.name }}
+        namespace: "{{ request.object.metadata.namespace }}"
+        data:
+          metadata:
+            labels:
+              temporal-demo.io/registration: "true"
+          data:
+            schemaVersion: "1"
+            workerName: "{{ request.object.metadata.name }}"
+            taskQueue: "{{ request.object.metadata.name }}.v1.temporal"
+            workflowType: ExampleChildWorkflow
+            runAfter: "{{ request.object.metadata.annotations.\"temporal-worker-run-after\" || '' }}"
+            sourceServiceName: "{{ request.object.metadata.name }}"
+            sourceServiceNamespace: "{{ request.object.metadata.namespace }}"
+            sourceServiceUID: "{{ request.object.metadata.uid }}"

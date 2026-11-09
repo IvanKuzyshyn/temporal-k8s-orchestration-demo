@@ -3,6 +3,7 @@ package plan
 import (
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,24 +12,23 @@ import (
 
 // These cases catch accepting malformed lists or losing canonical order/deduplication.
 func TestParseDependencies(t *testing.T) {
-	for _, tc := range []struct {
-		raw  string
-		want []string
-		bad  bool
-	}{
-		{"", nil, false}, {" \t\n", nil, false},
-		{" worker-b,worker-a,worker-b ", []string{"worker-a", "worker-b"}, false},
-		{"worker-a,", nil, true}, {",worker-a", nil, true}, {"worker-a,,worker-b", nil, true},
-		{"worker-a, \t ,worker-b", nil, true}, {"Worker-A", nil, true}, {"worker_a", nil, true},
-	} {
-		t.Run(tc.raw, func(t *testing.T) {
+	var cases []struct {
+		Raw  string
+		Want []string
+		Bad  bool
+	}
+	data, err := os.ReadFile("testdata/dependencies.json")
+	gomega.NewWithT(t).Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.NewWithT(t).Expect(json.Unmarshal(data, &cases)).To(gomega.Succeed())
+	for _, tc := range cases {
+		t.Run(tc.Raw, func(t *testing.T) {
 			g := gomega.NewWithT(t)
-			got, err := ParseDependencies(tc.raw)
-			if tc.bad {
+			got, err := ParseDependencies(tc.Raw)
+			if tc.Bad {
 				g.Expect(err).To(gomega.HaveOccurred())
 			} else {
 				g.Expect(err).NotTo(gomega.HaveOccurred())
-				g.Expect(got).To(gomega.Equal(tc.want))
+				g.Expect(got).To(gomega.Equal(tc.Want))
 			}
 		})
 	}

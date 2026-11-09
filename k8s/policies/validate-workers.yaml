@@ -1,0 +1,81 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: temporal-validate-workers
+  labels:
+    app.kubernetes.io/part-of: temporal-worker-discovery
+spec:
+  background: true
+  rules:
+    - name: worker-flag
+      match:
+        any:
+          - resources:
+              kinds:
+                - v1/Service
+              operations:
+                - CREATE
+                - UPDATE
+              namespaceSelector:
+                matchLabels:
+                  temporal-demo.io/worker-namespace: "true"
+      validate:
+        failureAction: Enforce
+        allowExistingViolations: false
+        message: temporal-worker must be the string true or false when present.
+        deny:
+          conditions:
+            all:
+              - key: "{{ contains(keys(request.object.metadata.annotations || `{}`), 'temporal-worker') }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.metadata.annotations.\"temporal-worker\" || '' }}"
+                operator: AnyNotIn
+                value:
+                  - "true"
+                  - "false"
+    - name: worker-dependencies
+      match:
+        any:
+          - resources:
+              kinds:
+                - v1/Service
+              operations:
+                - CREATE
+                - UPDATE
+              namespaceSelector:
+                matchLabels:
+                  temporal-demo.io/worker-namespace: "true"
+      context:
+        # Exactly the Unicode White_Space set used by Go strings.TrimSpace.
+        - name: whitespace
+          variable:
+            value: " \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+        - name: dependencies
+          variable:
+            jmesPath: request.object.metadata.annotations."temporal-worker-run-after" || ''
+      preconditions:
+        all:
+          - key: "{{ request.object.metadata.annotations.\"temporal-worker\" || '' }}"
+            operator: Equals
+            value: "true"
+      validate:
+        failureAction: Enforce
+        allowExistingViolations: false
+        message: Dependencies must be comma-separated Service names, with no empty entries or self-reference.
+        foreach:
+          - list: split(dependencies, ',')
+            preconditions:
+              all:
+                - key: "{{ trim(dependencies, whitespace) }}"
+                  operator: NotEquals
+                  value: ""
+            deny:
+              conditions:
+                any:
+                  - key: "{{ regex_match('^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$', trim(element, whitespace)) }}"
+                    operator: Equals
+                    value: false
+                  - key: "{{ trim(element, whitespace) }}"
+                    operator: Equals
+                    value: "{{ request.object.metadata.name }}"
