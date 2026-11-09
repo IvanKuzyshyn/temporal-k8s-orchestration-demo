@@ -10,7 +10,7 @@ permissions:
 jobs:
   baseline-persistence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,6 +31,13 @@ jobs:
           mise run test:kind-baseline | tee .local/ci-baseline.log
           grep -F '{"workflowId":' .local/ci-baseline.log > .local/history-before-reset.json
       - run: mise run test:kind-persistence
+      - name: Native Temporal activation, completion, zero and delayed activity retry
+        env:
+          # Long interruption is required locally and included on manual dispatch.
+          SCALING_SKIP_LONG: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
+        run: |
+          mise run apps:deploy-scaling
+          mise run test:scaling
       - name: Destructive reset ONLY on this disposable runner (including idempotent down)
         run: |
           mise run k8s:down

@@ -22,7 +22,11 @@ metadata:
   name: {{ .name }}
   namespace: temporal-demo-{{ .name }}
 spec:
+{{- if not $.Values.scaling.enabled }}
   replicas: {{ $.Values.replicas }}
+{{- else if $.Values.scaling.bootstrapZero }}
+  replicas: 0
+{{- end }}
   selector:
     matchLabels:
       app: {{ .name }}

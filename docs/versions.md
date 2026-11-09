@@ -16,7 +16,7 @@ Controller ruling for review I1: preserve the Go-only Task 1 foundation; runtime
 - **Task 2 — SDK contracts:** Temporal Go SDK **v1.50.0** is pinned. Darwin arm64 workflow/activity tests, targeted race tests, and uncached full validation pass (commands and results in `.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-2-report.md`). Scheduling, failure, SDK child cancellation, and heartbeating activity-context cancellation are exercised without a live server. **Linux CI acceptance remains pending controller observation.** These tests do not prove server/image/scaler compatibility or the future API's parent start policy.
 - **Task 4 — Compose runtime matrix:** verify selected image availability/digests and architecture support, exact SDK/server/PostgreSQL compatibility, matching schema-tool packaging, default and visibility schema setup/migrations before readiness, and history persistence across container replacement with named volumes. Run the Compose checks on the host and Linux CI; record reset behavior separately from persistence. Darwin-host/Linux ARM64 Docker evidence and controller-reported Linux amd64 CI at the initial Task4 commit are recorded below; fix-round CI requires fresh controller observation.
 - **Task 6 — kind infrastructure matrix:** exact tools, hash-verified charts, release-extracted CRD schemas, ARM64 controller/webhook readiness, paired Secret/PVC reruns and completed-history Pod-replacement/schema-rerun evidence are recorded below and in task-6-report.md. Destructive cluster deletion/reset evidence is recorded separately there. Linux amd64 acceptance remains pending controller observation; controller readiness does not close Tasks7/8 scaling/lifecycle gates.
-- **Task 7 — no-poller scaler behavior:** on the host and Linux CI, prove that the selected Temporal/KEDA pair exposes workflow and activity queue backlog with no active pollers and activates workers from zero using `queueTypes: "workflow,activity"`; retain scale-down and interruption evidence required by the task. Optional running-workflow counts must not be treated as strict in-flight protection. Evidence: pending.
+- **Task 7 — no-poller scaler behavior:** on the host and Linux CI, prove that the selected Temporal/KEDA pair exposes workflow and activity queue backlog with no active pollers and activates workers from zero using `queueTypes: "workflow,activity"`; retain scale-down and interruption evidence required by the task. Optional running-workflow counts must not be treated as strict in-flight protection. Darwin ARM64 host evidence is recorded in the Task 7 section below; latest-head Linux acceptance remains controller-observed and pending here.
 - **Task 8 — admission and cleanup before Task 9:** on the host and Linux CI, verify source-Service CREATE/UPDATE admission (malformed dependencies/self-reference rejected; valid roots and registration disable/removal allowed) and real-cluster registration create/update/delete/disable/annotation-removal/preexisting-resource lifecycle against the pinned Kyverno release. Source deletion and loss of policy match require separate assertions. If native generation is insufficient, choose and test explicit cleanup/source validation. **Task 9 Kubernetes discovery must not be enabled until this gate passes.** Evidence: pending.
 
 These assignments stage the blocking gate; they do not waive host/Linux verification, any existing tests, or cleanup-before-discovery. A failed compatibility check that changes a design contract still requires stopping and updating the approved design.
@@ -287,3 +287,70 @@ local down/reset occurred; baseline's owned forwards were cleaned up. Evidence:
 `.superpowers/sdd/kind-server-validation/task-1-report.md`. Previous Linux results
 above describe earlier changes only; fresh new-head Linux CI is controller-owned
 and is not claimed here.
+
+## Task 7 native Temporal/KEDA host evidence (2026-11-08 UTC)
+
+Darwin ARM64, retained dedicated kind cluster; unchanged Go1.27.3, Helm4.3.1,
+kind0.33.0, kubectl/server1.35.8. Actual installed images are Temporal1.32.0
+(`c3e752…f46ae`) and KEDA2.21.0 (`81fe65…ed809`), using the existing digest pins.
+SDK1.50.0/API1.63.5 are unchanged. `go mod tidy` only promotes the already-pinned
+protobuf1.36.11 dependency to direct for deterministic test-history hashing;
+no dependency version or infrastructure pin changes.
+
+- [Tagged KEDA source](https://github.com/kedacore/keda/blob/v2.21.0/pkg/scalers/temporal_scaler.go)
+  selects ordinary `DescribeTaskQueue(ReportStats=true)` per unversioned queue
+  type and sums `Stats.ApproximateBacklogCount`, not poller counts or deprecated
+  enhanced/version selectors. The [server1.32.0 frontend](https://github.com/temporalio/temporal/blob/v1.32.0/service/frontend/workflow_handler.go)
+  forwards that request to matching. Source selection is supplemented by the
+  actual no-worker runtime checks below.
+- `apps:deploy-scaling` and `test:scaling` ran against the retained cluster.
+  The real body-free API/static registry completed a singleton graph first,
+  then the canonical diamond. Cold activation took **6.404s / 6.474s** in the
+  full acceptance run. The singleton returned to zero real Pods **120.409s**
+  after completion; all diamond workers also returned to zero. These use the
+  production **5s polling / 120s cooldown**, min/max0/1, activation/target0/1
+  and `queueTypes: "workflow,activity"`.
+- Replica handoff/reapply watched **four update events**, all remaining at zero.
+  Native last-applied handoff prevents replica deletion/defaulting on a later
+  apply. Generation alone is unsuitable: the [pinned Deployment strategy](https://github.com/kubernetes/kubernetes/blob/v1.35.8/pkg/registry/apps/deployment/strategy.go)
+  increments it for annotation updates too.
+- Delayed retry: **20s test cooldown**, first activity50s, deliberate owned Pod
+  force-termination, heartbeat timeout, server-recorded attempt2 delayed90s.
+  Pods reached zero before that timestamp. While temporarily paused at zero,
+  the exact stats RPC returned **activity backlog1, workflow backlog0**.
+  Unpause activated in **41ms**, attempt2 succeeded with a5s fixture activity,
+  then Pods returned to zero **16.990s** after completion. The host workflow
+  poller used a separate queue. Cached poller metadata was not mistaken for
+  live worker Pods.
+- Accelerated in-flight experiment: **5s test cooldown / 50s activity**. Actual
+  logs show shutdown requested about4.65s into the activity, `Stopped Worker`
+  **30.009s** later, activity `context canceled`, and connection closing.
+  Temporal reported a heartbeat timeout and attempt2; bounded recovery and
+  eventual zero passed. Recovery uses120s cooldown/5s activity. Test-only
+  workflow activity timeouts/retry delay allow this experiment; production
+  duration validation (<60s), activity timeouts/retries and stop/grace30s/45s
+  remain unchanged. This does **not** claim the production120s cooldown
+  interrupted a50s activity.
+- `includeRunningWorkflowCount` is supported by this actual pair, explicitly
+  opt-in/defaultfalse. The native visibility query, including
+  `TemporalWorkerDeploymentVersion is null`, succeeded. With a50s production
+  child activity and5s test cooldown, one replica remained beyond cooldown
+  and returned to zero after completion. Visibility remains approximate and
+  eventually consistent; this is not an in-flight protection guarantee.
+- An unreachable endpoint produced **Ready=False/ScaledObjectCheckFailed** and
+  **Active=Unknown/UnknownState**, with the connection error in its message.
+  Restoring the endpoint returned to Ready/inactive. Errors are not reported
+  as a healthy empty queue. Initial Unknown status can also precede the first
+  completed scaler check.
+- Both a failed harness iteration and acceptance restored fixed replicas and
+  passed `test:kind-baseline`. Acceptance compared an existing completed
+  history's deterministic hash and unchanged PVC UID/bound volume and immutable
+  Secret UID/resourceVersion. No local reset, storage/credential mutation,
+  Compose operation, unrelated cluster action or live discovery was used.
+
+Commands, RED/GREEN failures and ignored raw evidence are recorded in
+`.superpowers/sdd/2026-10-17-temporal-k8s-orchestration/task-7-report.md`.
+[Autoscaling instructions](autoscaling.md) describe test-only timing and cleanup.
+Cumulative kind CI adds the same task's activation/zero/delayed-retry checks;
+manual dispatch also includes long in-flight shutdown. **No latest-head Linux
+execution is claimed here.** Task8 policy/lifecycle acceptance is still separate.

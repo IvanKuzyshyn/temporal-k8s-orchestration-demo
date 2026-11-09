@@ -1,2 +1,4 @@
-# Static mode is intentionally the only implemented mode. No ScaledObjects.
+# Fixed-replica baseline. Static registry is also used by values-scaling.yaml.
 replicas: 1
+scaling:
+  enabled: false

@@ -3,6 +3,12 @@ images:
   worker: temporal-demo/worker
   tag: render-only
 replicas: 1
+scaling:
+  enabled: false
+  bootstrapZero: false
+  pollingInterval: 5
+  cooldownPeriod: 120
+  includeRunningWorkflowCount: false
 temporalAddress: temporal.temporal.svc.cluster.local:7233
 workers:
   - name: worker-a
