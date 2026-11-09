@@ -79,6 +79,7 @@ func TestFatalWorkerStopsRunAndAdmission(t *testing.T) {
 				result <- run(ctx, "orchestrator", c, slog.New(slog.NewTextHandler(io.Discard, nil)),
 					func(context.Context, client.Options) (client.Client, error) { return tc, nil },
 					func(_ client.Client, _ string, o worker.Options) worker.Worker { opts <- o; return w },
+					inClusterClient,
 				)
 			}()
 			var options worker.Options

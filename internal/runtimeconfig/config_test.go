@@ -26,7 +26,8 @@ func TestConfig(t *testing.T) {
 		{"orchestrator defaults", "orchestrator", nil, false},
 		{"bad parent queue", "orchestrator", map[string]string{"TASK_QUEUE": "other"}, true},
 		{"unknown mode", "orchestrator", map[string]string{"REGISTRY_MODE": "magic"}, true},
-		{"kubernetes not wired", "orchestrator", map[string]string{"REGISTRY_MODE": "kubernetes", "WORKER_NAMESPACE_SELECTOR": "temporal-demo.io/worker-namespace=true"}, true},
+		{"kubernetes discovery", "orchestrator", map[string]string{"REGISTRY_MODE": "kubernetes", "WORKER_NAMESPACE_SELECTOR": "temporal-demo.io/worker-namespace=true"}, false},
+		{"invalid selector", "orchestrator", map[string]string{"REGISTRY_MODE": "kubernetes", "WORKER_NAMESPACE_SELECTOR": "invalid in ("}, true},
 		{"bad HTTP address", "worker", map[string]string{"WORKER_NAME": "worker-a", "HTTP_ADDR": "no-port"}, true},
 		{"bad temporal address", "orchestrator", map[string]string{"TEMPORAL_ADDRESS": "no-port"}, true},
 	} {

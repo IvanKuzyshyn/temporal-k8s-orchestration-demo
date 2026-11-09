@@ -3,6 +3,9 @@ images:
   worker: temporal-demo/worker
   tag: render-only
 replicas: 1
+registry:
+  mode: static
+  namespaceSelector: temporal-demo.io/worker-namespace=true
 scaling:
   enabled: false
   bootstrapZero: false
