@@ -93,7 +93,12 @@ func (k *Kubernetes) newCache(ctx context.Context, ns string) *discoveryCache {
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
 			d.mu.Lock()
+			// A retry supersedes the entire pending attempt, even if its list
+			// reached the store but its watch failed before acknowledgment.
+			applied := make(chan struct{})
 			d.listing = true
+			d.listed = nil
+			d.listApplied = applied
 			d.mu.Unlock()
 			// A full list is small in this demo and gives an explicit relist barrier.
 			o.Limit = 0
@@ -127,8 +132,11 @@ func (k *Kubernetes) newCache(ctx context.Context, ns string) *discoveryCache {
 				expected[key] = item
 			}
 			d.mu.Lock()
+			if d.listApplied != applied {
+				d.mu.Unlock()
+				return nil, fmt.Errorf("list attempt superseded")
+			}
 			d.listed = expected
-			d.listApplied = make(chan struct{})
 			d.mu.Unlock()
 			return obj, nil
 		},
