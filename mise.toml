@@ -5,6 +5,7 @@ go = "1.27.3"
 kind = "0.33.0"
 helm = "4.3.1"
 kubectl = "1.35.8"
+kyverno = "1.19.2"
 
 [env]
 GOTOOLCHAIN = "local"
@@ -18,7 +19,7 @@ description = "Test complete rendered graph extraction and real CLI fixture exit
 run = "go test -race ./internal/manifest ./cmd/validate-graph"
 
 [tasks.validate]
-description = "Check Go/race/vet, Helm/full graph and Compose config without a cluster (same command in CI)"
+description = "Check Go/race/vet, Kyverno policies, Helm/full graph and Compose config without a cluster"
 run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
@@ -32,8 +33,28 @@ for script in scripts/*.sh; do
   bash -n "$script"
 done
 mise run test:manifests
+mise run policies:test
 mise run validate:manifests
 bash scripts/compose.sh config
+'''
+
+[tasks."policies:test"]
+description = "Evaluate admission CREATE/UPDATE/DELETE and generated schema with the pinned Kyverno CLI"
+run = "go test -count=1 -v ./k8s/policies/tests"
+
+[tasks."policies:install"]
+description = "Install only owned worker admission and registration policies on the ready demo"
+run = "bash scripts/policies-install.sh"
+
+[tasks."test:policies-integration"]
+description = "Prove admission and registration lifecycle in temporary namespaces on the retained demo"
+run = '''
+bash -euo pipefail -c '
+source scripts/kind-common.sh
+assert_context
+export POLICIES_ROOT="$ROOT"
+go test -count=1 -tags=integration,policies_integration -run "^TestDiscoveryPolicy$" -v -timeout=20m ./tests/integration
+'
 '''
 
 [tasks."k8s:up"]

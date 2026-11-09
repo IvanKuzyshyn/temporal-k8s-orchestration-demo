@@ -1,0 +1,21 @@
+# Cluster-wide Service reads are required by v1.19.2's generateExisting list
+# and reporting informers. No new writes, Secret access, or orchestrator grants.
+# The pinned chart already gives the background controller ConfigMap CRUD.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: temporal-worker-service-reader
+  labels:
+    app.kubernetes.io/part-of: temporal-worker-discovery
+    rbac.kyverno.io/aggregate-to-admission-controller: "true"
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+    rbac.kyverno.io/aggregate-to-reports-controller: "true"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - watch

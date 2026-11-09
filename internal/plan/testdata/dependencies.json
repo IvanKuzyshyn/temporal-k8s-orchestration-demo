@@ -1,0 +1,18 @@
+[
+  {"raw":"","want":null,"bad":false},
+  {"raw":" \t\n","want":null,"bad":false},
+  {"raw":" worker-b,worker-a,worker-b ","want":["worker-a","worker-b"],"bad":false},
+  {"raw":"worker-a,","want":null,"bad":true},
+  {"raw":",worker-a","want":null,"bad":true},
+  {"raw":"worker-a,,worker-b","want":null,"bad":true},
+  {"raw":"worker-a, \t ,worker-b","want":null,"bad":true},
+  {"raw":"Worker-A","want":null,"bad":true},
+  {"raw":"worker_a","want":null,"bad":true},
+  {"raw":"\u0085\u00a0worker-a\u1680,\u2000worker-b\u200a\u2028\u2029\u202f\u205f\u3000","want":["worker-a","worker-b"],"bad":false},
+  {"raw":"\t\u000b\u000c\r\u0085\u00a0\u1680\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000","want":null,"bad":false},
+  {"raw":"worker.a","want":null,"bad":true},
+  {"raw":"1worker","want":null,"bad":true},
+  {"raw":"-worker","want":null,"bad":true},
+  {"raw":"worker-","want":null,"bad":true},
+  {"raw":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","want":null,"bad":true}
+]
