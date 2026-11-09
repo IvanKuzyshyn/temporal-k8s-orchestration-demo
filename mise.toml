@@ -53,7 +53,7 @@ bash -euo pipefail -c '
 source scripts/kind-common.sh
 assert_context
 export POLICIES_ROOT="$ROOT"
-go test -count=1 -tags=integration -run "^TestDiscoveryPolicy$" -v -timeout=20m ./tests/integration
+go test -count=1 -tags=integration,policies_integration -run "^TestDiscoveryPolicy$" -v -timeout=20m ./tests/integration
 '
 '''
 
