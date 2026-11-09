@@ -265,11 +265,20 @@ func TestDiscoveryPolicy(t *testing.T) {
 	h.g.Expect(err.Error()).To(gomega.ContainSubstring("duplicate"))
 	t.Log("PASS identical names in two namespaces; combined graph rejects duplicate identity")
 	h.service(ordinary, "unselected", map[string]string{"temporal-worker": "invalid"})
-	// Annotation matches generation: namespace scope alone must exclude this Service.
-	h.service(ordinary, "unselected-worker", map[string]string{"temporal-worker": "true"})
+	// True registration plus malformed dependencies isolates namespace exclusion
+	// for both generation and dependency admission, on actual CREATE and UPDATE.
+	h.service(ordinary, "unselected-worker", map[string]string{"temporal-worker": "true", "temporal-worker-run-after": ","})
+	h.service(ordinary, "unselected-worker", map[string]string{"temporal-worker": "true", "temporal-worker-run-after": "worker-a,"})
 	h.service(ns, "unregistered", nil)
-	h.apply(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "ordinary", "namespace": ns, "annotations": annotations}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}})
-	h.apply(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "ordinary-deploy", "namespace": ns, "annotations": annotations}, "spec": map[string]any{"replicas": 0, "selector": map[string]any{"matchLabels": map[string]string{"app": "ordinary"}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "ordinary"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}}}})
+	unrelatedAnnotations := map[string]string{"temporal-worker": "true"}
+	// Both kinds reside in a selected namespace and satisfy the true-registration
+	// precondition; only kind scope permits their malformed dependencies.
+	for _, deps := range []string{",", "worker-a,"} {
+		unrelatedAnnotations["temporal-worker-run-after"] = deps
+		h.apply(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "ordinary", "namespace": ns, "annotations": unrelatedAnnotations}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}})
+		h.apply(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "ordinary-deploy", "namespace": ns, "annotations": unrelatedAnnotations}, "spec": map[string]any{"replicas": 0, "selector": map[string]any{"matchLabels": map[string]string{"app": "ordinary"}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "ordinary"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}}}})
+	}
+	t.Log("PASS CREATE/UPDATE accepts true registrations with malformed dependencies in unselected namespace and unrelated kinds")
 	for _, pair := range [][2]string{{ordinary, "unselected"}, {ordinary, "unselected-worker"}, {ns, "unregistered"}, {ns, "ordinary"}, {ns, "ordinary-deploy"}} {
 		h.absent(pair[0], pair[1])
 	}

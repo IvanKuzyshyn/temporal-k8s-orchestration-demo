@@ -58,8 +58,11 @@ func TestAdmission(t *testing.T) {
 				add(fmt.Sprintf("invalid-%d", i), "Service", "workers", map[string]string{"temporal-worker": value}, "fail", "skip")
 			}
 			add("unselected", "Service", "ordinary", map[string]string{"temporal-worker": "invalid"}, "skip", "skip")
+			// True registration and malformed dependencies isolate namespace scope.
+			add("unselected-dependencies", "Service", "ordinary", map[string]string{"temporal-worker": "true", "temporal-worker-run-after": ","}, "skip", "skip")
 			for _, kind := range []string{"Pod", "Deployment"} {
 				add("ordinary-"+strings.ToLower(kind), kind, "workers", map[string]string{"temporal-worker": "invalid"}, "skip", "skip")
+				add("dependencies-"+strings.ToLower(kind), kind, "workers", map[string]string{"temporal-worker": "true", "temporal-worker-run-after": ","}, "skip", "skip")
 			}
 			writeJSON := func(name string, value any) {
 				b, err := json.MarshalIndent(value, "", "  ")
