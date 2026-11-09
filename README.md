@@ -4,8 +4,9 @@ Go + Temporal dependency-aware workflows: `worker-a → worker-b/worker-c → wo
 A body-free HTTP request snapshots a validated static graph; each worker returns
 only its identity. Compose runs four always-on workers; **it does not emulate
 KEDA or Kyverno**. The kind baseline runs the same static graph across five
-application namespaces. Controllers are installed, but discovery, policies and
-zero-to-one scaling remain later stages.
+application namespaces. An [isolated native KEDA scaling experiment](docs/autoscaling.md)
+adds zero-to-one workers while retaining the static registry. Dynamic discovery
+and registration policies remain later stages.
 
 ## Prerequisites
 

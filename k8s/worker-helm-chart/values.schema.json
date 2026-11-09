@@ -8,6 +8,11 @@
       "tag":{"type":"string","pattern":"^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$","not":{"enum":["latest"]}}
     }},
     "replicas":{"const":1},
+    "scaling":{"type":"object","additionalProperties":false,"required":["enabled","bootstrapZero","pollingInterval","cooldownPeriod","includeRunningWorkflowCount"],"properties":{
+      "enabled":{"type":"boolean"},"bootstrapZero":{"type":"boolean"},
+      "pollingInterval":{"type":"integer","minimum":1},"cooldownPeriod":{"type":"integer","minimum":1},
+      "includeRunningWorkflowCount":{"type":"boolean"}
+    }},
     "temporalAddress":{"const":"temporal.temporal.svc.cluster.local:7233"},
     "workers":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["name","runAfter"],"properties":{
       "name":{"type":"string","maxLength":49,"pattern":"^[a-z]([-a-z0-9]*[a-z0-9])?$","not":{"const":"orchestrator"}},

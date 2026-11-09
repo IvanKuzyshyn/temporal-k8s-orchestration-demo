@@ -1,0 +1,30 @@
+{{- if .Values.scaling.enabled }}
+{{- range .Values.workers }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .name }}
+  namespace: temporal-demo-{{ .name }}
+  labels:
+    temporal-demo.io/scaling: "true"
+spec:
+  scaleTargetRef:
+    name: {{ .name }}
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  pollingInterval: {{ $.Values.scaling.pollingInterval }}
+  cooldownPeriod: {{ $.Values.scaling.cooldownPeriod }}
+  triggers:
+    - type: temporal
+      metadata:
+        endpoint: {{ $.Values.temporalAddress | quote }}
+        namespace: default
+        taskQueue: {{ printf "%s.v1.temporal" .name | quote }}
+        queueTypes: "workflow,activity"
+        activationTargetQueueSize: "0"
+        targetQueueSize: "1"
+        enableTLS: "false"
+        includeRunningWorkflowCount: {{ $.Values.scaling.includeRunningWorkflowCount | quote }}
+{{- end }}
+{{- end }}

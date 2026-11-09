@@ -79,6 +79,14 @@ exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
 [tasks."test:kind-baseline"]
 run = "bash scripts/kind-integration.sh baseline"
 
+[tasks."test:scaling"]
+description = "Prove native Temporal scaling on the retained owned kind cluster"
+run = "bash scripts/scaling.sh test"
+
+[tasks."apps:deploy-scaling"]
+description = "Install native KEDA scaling, bootstrapping zero only on first installation"
+run = "bash scripts/scaling.sh deploy"
+
 [tasks."test:kind-persistence"]
 run = "bash scripts/kind-integration.sh persistence"
 
