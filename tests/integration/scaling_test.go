@@ -153,12 +153,79 @@ func (h *harness) healthy(name string) {
 	}
 }
 
+// Pending controller state and read errors are returned to Eventually, never
+// asserted inside its probe. Persistent errors retain their last diagnostics.
+func (h *harness) zeroReady(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	read := func(args ...string) ([]byte, error) {
+		b, err := exec.CommandContext(ctx, "kubectl", h.argv(append([]string{"-n", "temporal-demo-" + name}, args...)...)...).CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("kubectl %v: %w: %s", args, err, b)
+		}
+		return b, nil
+	}
+	var deployment struct{ Spec struct{ Replicas *int } }
+	b, err := read("get", "deployment", name, "-o", "json")
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &deployment); err != nil {
+		return fmt.Errorf("Deployment %s: %w", name, err)
+	}
+	var pods struct{ Items []json.RawMessage }
+	b, err = read("get", "pods", "-l", "app="+name, "-o", "json")
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &pods); err != nil {
+		return fmt.Errorf("Pods %s: %w", name, err)
+	}
+	var scaler struct {
+		Status struct {
+			Conditions []struct{ Type, Status, Reason, Message string }
+			Health     map[string]struct{ NumberOfFailures int }
+		}
+	}
+	b, err = read("get", "scaledobject", name, "--ignore-not-found", "-o", "json")
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return fmt.Errorf("missing ScaledObject %s", name)
+	}
+	if err := json.Unmarshal(b, &scaler); err != nil {
+		return fmt.Errorf("ScaledObject %s: %w", name, err)
+	}
+	ready, activeKnown, healthy := false, false, true
+	for _, condition := range scaler.Status.Conditions {
+		if condition.Type == "Ready" {
+			ready = condition.Status == "True"
+		}
+		if condition.Type == "Active" {
+			activeKnown = condition.Status == "True" || condition.Status == "False"
+		}
+	}
+	for _, metric := range scaler.Status.Health {
+		healthy = healthy && metric.NumberOfFailures == 0
+	}
+	replicas := -1
+	if deployment.Spec.Replicas != nil {
+		replicas = *deployment.Spec.Replicas
+	}
+	if replicas == 0 && len(pods.Items) == 0 && ready && activeKnown && healthy {
+		return nil
+	}
+	return fmt.Errorf("waiting for %s zero real Pods and healthy Ready: replicas=%d pods=%d conditions=%+v health=%+v", name, replicas, len(pods.Items), scaler.Status.Conditions, scaler.Status.Health)
+}
+
 func (h *harness) waitZero(name string, bound time.Duration) {
 	h.t.Helper()
 	start := time.Now()
-	h.g.Eventually(func() bool { return h.zero(name) }, bound, 2*time.Second).Should(gomega.BeTrue())
-	h.healthy(name)
-	h.t.Logf("%s zero replicas AND zero real Pods after %s; cached Temporal pollers are not live Pods", name, time.Since(start).Round(time.Millisecond))
+	if !h.g.Eventually(func() error { return h.zeroReady(name) }, bound, 2*time.Second).Should(gomega.Succeed()) {
+		return
+	}
+	h.t.Logf("%s zero replicas AND zero real Pods, scaler Ready=True after %s; cached Temporal pollers are not live Pods", name, time.Since(start).Round(time.Millisecond))
 }
 
 // Render and validate the same buffered artifact that gets applied, retaining
@@ -275,9 +342,9 @@ func (h *harness) parent(names []string) {
 func TestActivationFromZero(t *testing.T) {
 	h := newHarness(t)
 	h.preflight()
-	h.g.Expect(h.zero("worker-a")).To(gomega.BeTrue(), "registered worker must start at zero")
-	h.healthy("worker-a")
+	h.waitZero("worker-a", 3*time.Minute)
 	h.graph(true)
+	h.waitZero("worker-a", 3*time.Minute)
 	h.parent([]string{"worker-a"})
 	h.graph(false)
 	for _, name := range []string{"worker-a", "worker-b", "worker-c", "worker-d"} {
