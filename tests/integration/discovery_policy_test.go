@@ -265,10 +265,12 @@ func TestDiscoveryPolicy(t *testing.T) {
 	h.g.Expect(err.Error()).To(gomega.ContainSubstring("duplicate"))
 	t.Log("PASS identical names in two namespaces; combined graph rejects duplicate identity")
 	h.service(ordinary, "unselected", map[string]string{"temporal-worker": "invalid"})
+	// Annotation matches generation: namespace scope alone must exclude this Service.
+	h.service(ordinary, "unselected-worker", map[string]string{"temporal-worker": "true"})
 	h.service(ns, "unregistered", nil)
 	h.apply(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "ordinary", "namespace": ns, "annotations": annotations}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}})
 	h.apply(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "ordinary-deploy", "namespace": ns, "annotations": annotations}, "spec": map[string]any{"replicas": 0, "selector": map[string]any{"matchLabels": map[string]string{"app": "ordinary"}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "ordinary"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.10"}}}}}})
-	for _, pair := range [][2]string{{ordinary, "unselected"}, {ns, "unregistered"}, {ns, "ordinary"}, {ns, "ordinary-deploy"}} {
+	for _, pair := range [][2]string{{ordinary, "unselected"}, {ordinary, "unselected-worker"}, {ns, "unregistered"}, {ns, "ordinary"}, {ns, "ordinary-deploy"}} {
 		h.absent(pair[0], pair[1])
 	}
 	// Delete only our two policies. Cleanup always reinstalls their checked-in baseline.

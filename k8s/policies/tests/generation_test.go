@@ -1,12 +1,15 @@
 package policies_test
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/onsi/gomega"
+	"go.yaml.in/yaml/v3"
 )
 
 // Catches wrong schema fields, hard-coded namespace/UID, and generation scope.
@@ -27,6 +30,16 @@ metadata:
   annotations:
     temporal-worker: "true"
     temporal-worker-run-after: " worker-z,worker-y,worker-z "
+`)
+	// This Service satisfies the annotation match; only namespace scope excludes it.
+	write("unselected.yaml", `apiVersion: v1
+kind: Service
+metadata:
+  name: unselected-worker
+  namespace: ordinary
+  uid: unselected-source-uid
+  annotations:
+    temporal-worker: "true"
 `)
 	write("expected.yaml", `apiVersion: v1
 kind: ConfigMap
@@ -51,6 +64,9 @@ namespaceSelector:
   - name: workers
     labels:
       temporal-demo.io/worker-namespace: "true"
+  - name: ordinary
+    labels:
+      temporal-demo.io/worker-namespace: "false"
 `)
 	write("kyverno-test.yaml", `apiVersion: cli.kyverno.io/v1alpha1
 kind: Test
@@ -73,4 +89,34 @@ results:
 	output, err := exec.Command("kyverno", "test", dir, "--remove-color").CombinedOutput()
 	t.Logf("%s", output)
 	g.Expect(err).NotTo(gomega.HaveOccurred(), "%s", output)
+
+	// Inspect actual generated resources: excluded generate triggers have no CLI
+	// test response in this release, so a result: skip expectation is not usable.
+	generated := filepath.Join(dir, "generated.yaml")
+	output, err = exec.Command("kyverno", "apply", policy,
+		"--resource", filepath.Join(dir, "service.yaml"),
+		"--resource", filepath.Join(dir, "unselected.yaml"),
+		"--values-file", filepath.Join(dir, "values.yaml"), "--output", generated).CombinedOutput()
+	t.Logf("%s", output)
+	g.Expect(err).NotTo(gomega.HaveOccurred(), "%s", output)
+	data, err := os.ReadFile(generated)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	var identities []string
+	for {
+		var resource struct {
+			Kind     string
+			Metadata struct{ Name, Namespace string }
+		}
+		err := decoder.Decode(&resource)
+		if err == io.EOF {
+			break
+		}
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+		if resource.Kind != "" {
+			identities = append(identities, resource.Kind+"/"+resource.Metadata.Namespace+"/"+resource.Metadata.Name)
+		}
+	}
+	// Positive and negative differ only in namespace selection, not registration.
+	g.Expect(identities).To(gomega.Equal([]string{"ConfigMap/workers/temporal-worker-worker-x"}))
 }
