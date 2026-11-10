@@ -55,6 +55,17 @@ jobs:
           ' EXIT
           mise run test:registry
           mise run test:rbac
+      - name: Combined live discovery and native-scaling diamond
+        shell: bash
+        run: |
+          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
+          mise run smoke
+      - name: Longer snapshot and recovery experiments
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
+          mise run test:resilience
       - name: Destructive reset ONLY on this disposable runner (including idempotent down)
         run: |
           mise run k8s:down
@@ -88,9 +99,25 @@ jobs:
           [[ $code == 404 ]]
           echo 'PASS: old workflow history is absent (404) after explicit cluster reset'
       - run: mise run test:kind-baseline
+      - name: Repeat combined smoke after disposable runner recreation
+        shell: bash
+        run: |
+          mise run policies:install
+          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
+          mise run smoke
       - name: Scoped secret-free failure diagnostics
         if: failure()
         run: mise run kind:diagnostics
+      - name: Preserve secret-free combined acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: task10-kind-evidence
+          path: |
+            .local/task10-smoke-*
+            .local/task10-resilience-*
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Always delete ONLY temporal-demo cluster and its local PVC
         if: always()
         run: mise run k8s:down
