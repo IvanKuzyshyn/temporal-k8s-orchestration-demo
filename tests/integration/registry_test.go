@@ -366,7 +366,7 @@ func TestRegistryRBAC(t *testing.T) {
 		t.Logf("impersonation %v -> %s (diagnostic: %s)", args, strings.TrimSpace(string(out)), strings.TrimSpace(diagnostic.String()))
 	}
 	for _, verb := range []string{"get", "list", "watch"} {
-		check("yes", verb, "namespaces")
+		check("yes", verb, "namespaces", "--all-namespaces")
 		check("no", verb, "configmaps", "--all-namespaces")
 		for _, ns := range []string{"temporal-demo-worker-a", "temporal-demo-worker-b", "temporal-demo-worker-c", "temporal-demo-worker-d"} {
 			check("yes", verb, "configmaps", "-n", ns)
@@ -380,7 +380,7 @@ func TestRegistryRBAC(t *testing.T) {
 		check("no", verb, "secrets", "--all-namespaces")
 	}
 	for _, verb := range []string{"create", "update", "patch", "delete", "deletecollection"} {
-		check("no", verb, "namespaces")
+		check("no", verb, "namespaces", "--all-namespaces")
 		for _, resource := range []string{"configmaps", "secrets", "services"} {
 			for _, ns := range []string{"temporal-demo-worker-a", "temporal-demo-worker-b", "temporal-demo-worker-c", "temporal-demo-worker-d", "default", "temporal-demo-orchestrator"} {
 				check("no", verb, resource, "-n", ns)

@@ -221,25 +221,51 @@ func (k *Kubernetes) newCache(ctx context.Context, ns string) *discoveryCache {
 	go func() { defer close(d.done); d.informer.RunWithContext(ctx) }()
 	return d
 }
-func (d *discoveryCache) ready(now time.Time) (bool, string) {
+
+// A view binds consumed objects to the exact list attempt/readiness decision.
+// Informer objects are immutable; callers never mutate these internal values.
+type cacheView struct {
+	objects map[string]runtime.Object
+	attempt chan struct{}
+	synced  bool
+	problem string
+}
+
+func (d *discoveryCache) storeView() map[string]runtime.Object {
+	objects := make(map[string]runtime.Object)
+	for _, obj := range d.informer.GetStore().List() {
+		key, _ := cache.MetaNamespaceKeyFunc(obj)
+		objects[key] = obj.(runtime.Object)
+	}
+	return objects
+}
+
+func (d *discoveryCache) view(now time.Time) cacheView {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.listing && d.listed != nil {
-		objects := d.informer.GetStore().List()
-		matches := len(objects) == len(d.listed)
-		for _, obj := range objects {
-			key, _ := cache.MetaNamespaceKeyFunc(obj)
-			if !reflect.DeepEqual(obj, d.listed[key]) {
-				matches = false
-				break
-			}
-		}
-		if matches && d.informer.HasSynced() {
-			d.listing = false
-			d.listed = nil
-			close(d.listApplied)
-		}
+	v := cacheView{objects: d.storeView(), attempt: d.listApplied}
+	if d.listing && d.listed != nil && reflect.DeepEqual(v.objects, d.listed) && d.informer.HasSynced() {
+		d.listing = false
+		d.listed = nil
+		close(d.listApplied)
 	}
+	v.synced, v.problem = d.readinessLocked(now)
+	return v
+}
+
+func (d *discoveryCache) ready(now time.Time) (bool, string) {
+	v := d.view(now)
+	return v.synced, v.problem
+}
+
+// Caller holds mu. Validation never acknowledges a newer list on behalf of an
+// older consumed view; a changed attempt or store invalidates that assembly.
+func (d *discoveryCache) matchesLocked(v cacheView, now time.Time) bool {
+	ready, _ := d.readinessLocked(now)
+	return ready && d.listApplied == v.attempt && reflect.DeepEqual(v.objects, d.storeView())
+}
+
+func (d *discoveryCache) readinessLocked(now time.Time) (bool, string) {
 	if d.listing || !d.informer.HasSynced() {
 		return false, "cache not synchronized: " + d.problem
 	}
@@ -279,8 +305,9 @@ func (k *Kubernetes) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 		}
+		namespaceView := namespaces.view(k.now())
 		selected := map[string]bool{}
-		for _, obj := range namespaces.informer.GetStore().List() {
+		for _, obj := range namespaceView.objects {
 			ns := obj.(*core.Namespace)
 			if selector.Matches(labels.Set(ns.Labels)) {
 				selected[ns.Name] = true
@@ -298,11 +325,12 @@ func (k *Kubernetes) Run(ctx context.Context) error {
 			}
 		}
 		s := Snapshot{Synced: true}
-		if ok, problem := namespaces.ready(k.now()); !ok {
+		if !namespaceView.synced {
 			s.Synced = false
-			s.Problems = append(s.Problems, "Namespaces: "+problem)
+			s.Problems = append(s.Problems, "Namespaces: "+namespaceView.problem)
 		}
 		registrations := []plan.Registration{}
+		workerViews := make(map[string]cacheView, len(workers))
 		names := make([]string, 0, len(workers))
 		for ns := range workers {
 			names = append(names, ns)
@@ -310,12 +338,14 @@ func (k *Kubernetes) Run(ctx context.Context) error {
 		sort.Strings(names)
 		for _, ns := range names {
 			d := workers[ns]
-			if ok, problem := d.ready(k.now()); !ok {
+			v := d.view(k.now())
+			workerViews[ns] = v
+			if !v.synced {
 				s.Synced = false
-				s.Problems = append(s.Problems, "namespace "+ns+": "+problem)
+				s.Problems = append(s.Problems, "namespace "+ns+": "+v.problem)
 				continue
 			}
-			for _, obj := range d.informer.GetStore().List() {
+			for _, obj := range v.objects {
 				cm := obj.(*core.ConfigMap)
 				if cm.Labels["temporal-demo.io/registration"] != "true" {
 					continue
@@ -335,8 +365,37 @@ func (k *Kubernetes) Run(ctx context.Context) error {
 			}
 		}
 		sort.Strings(s.Problems)
-		k.mu.Lock()
-		k.snapshot = s
-		k.mu.Unlock()
+		k.publish(s, namespaces, namespaceView, workers, workerViews, names)
 	}
+}
+
+// Fence list attempts and revalidate the consumed store views through the
+// publication. Namespace validation is last, so newly observed membership is
+// never acknowledged with a graph assembled from an older selected set.
+func (k *Kubernetes) publish(s Snapshot, namespaces *discoveryCache, namespaceView cacheView,
+	workers map[string]*discoveryCache, workerViews map[string]cacheView, names []string) {
+	now := k.now()
+	namespaces.mu.Lock()
+	defer namespaces.mu.Unlock()
+	for _, ns := range names {
+		workers[ns].mu.Lock()
+		defer workers[ns].mu.Unlock()
+	}
+	if s.Synced {
+		unchanged := true
+		for _, ns := range names {
+			if !workers[ns].matchesLocked(workerViews[ns], now) {
+				unchanged = false
+			}
+		}
+		if !namespaces.matchesLocked(namespaceView, now) {
+			unchanged = false
+		}
+		if !unchanged {
+			s = Snapshot{Problems: []string{"discovery changed while assembling snapshot"}}
+		}
+	}
+	k.mu.Lock()
+	k.snapshot = s
+	k.mu.Unlock()
 }
