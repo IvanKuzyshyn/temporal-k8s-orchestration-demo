@@ -43,24 +43,30 @@ func TestProcessKubernetesDiscovery(t *testing.T) {
 	w := &lifecycleWorker{stopStarted: make(chan struct{}), allowStop: make(chan struct{}), start: func() error { return nil }}
 	close(w.allowStop)
 	tc := &lifecycleClient{closed: make(chan struct{})}
+	hc := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone(), Timeout: time.Second}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- run(ctx, "orchestrator", c, slog.New(slog.NewTextHandler(io.Discard, nil)), func(context.Context, client.Options) (client.Client, error) { return tc, nil }, func(client.Client, string, worker.Options) worker.Worker { return w }, func() (kubernetes.Interface, error) { return kc, nil })
 	}()
-	t.Cleanup(func() { cancel(); g.Eventually(done, 5*time.Second).Should(gomega.Receive(gomega.BeNil())) })
+	t.Cleanup(func() {
+		// A timed-out request may leave a background dial in the pool without
+		// sending headers. Release our connections before HTTP Shutdown joins.
+		hc.CloseIdleConnections()
+		cancel()
+		g.Eventually(done, 5*time.Second).Should(gomega.Receive(gomega.BeNil()))
+	})
 	status := func(path string) int {
-		hc := &http.Client{Timeout: time.Second}
 		res, err := hc.Get("http://" + addr + path)
 		if err != nil {
 			return 0
 		}
 		defer res.Body.Close()
+		_, _ = io.Copy(io.Discard, res.Body)
 		return res.StatusCode
 	}
 	g.Eventually(func() int { return status("/readyz") }, 5*time.Second).Should(gomega.Equal(200))
-	res, err := http.Get("http://" + addr + "/workers")
+	res, err := hc.Get("http://" + addr + "/workers")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	defer res.Body.Close()
 	b, err := io.ReadAll(res.Body)
