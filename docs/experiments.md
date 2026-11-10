@@ -185,6 +185,10 @@ failure knob or private production-state injection was used.
 
 ## Preservation and outstanding verification
 
+Ordinary runs preserve their own pre-test baseline; that guarantee does not
+extend across an explicitly authorized destructive cluster reset. The original
+cluster's preservation observations below are **historical pre-reset proof**.
+
 Successful runs restore the original five application specs and last-applied
 metadata, exact source Service identity/spec/annotations, bound PVC,
 immutable Secret UID/resourceVersion, policy identities/specs, Temporal server
@@ -199,22 +203,105 @@ The original pre-experiment witness
 `2bef29cb6361ea06ab4c84a5e5479fa793211c96b85f0d9e4b666adcb39db87d`
 after the recovery suite (`original-witness-after.log`, exit 0).
 
-**Fresh local recreation remains blocked on an approved isolated Docker
-VM/daemon.** No second cluster, host tooling installation, Docker-context switch,
-retained-cluster reset, Temporal server deletion or storage mutation was done.
-Two passing retained-cluster smokes do not satisfy the fresh-local requirement.
+Fresh-local recreation was initially blocked by the no-reset safety boundary.
+The user subsequently explicitly authorized deleting `temporal-demo` for testing,
+as recorded in `task-10-recreation-authorization.md` in the task workspace.
+That authorization superseded only the cluster-preservation restriction for one
+deliberate local reset. No separate VM was required or provisioned. The fresh-local
+acceptance below resolves that verification gap; earlier retained-cluster runs
+are not being relabeled as fresh evidence.
 
 Automatic PR CI retains all earlier phases and adds the same public smoke before
 and after its existing **disposable hosted runner** recreation. Manual dispatch
 also runs the same public resilience task. Secret-free combined proof directories
 are uploaded even on failure; kubeconfig/credential files are not included.
 Actual exact-head hosted CI has not been run by this implementer and cannot be
-claimed as evidence. Neither hosted Linux results nor these retained-local
-results substitute for the outstanding fresh-local verification. No Task11 or
-PR-ready claim is made.
+claimed as evidence. Fresh-local results below are distinct from the earlier
+retained-local results and from prospective hosted Linux proof. Independent task
+and whole-branch reviews, controller verification and actual exact-head cumulative
+Linux CI remain pending. No Task10-complete, Task11 or PR-ready claim is made.
 
 Final offline `mise run validate` passed (exit 0; `.local/task10/validate-final.log`
 and `.exit`), including full race tests/vet, dedicated acceptance sensitivity,
 Bash syntax, pinned policy tests, chart/graph checks and credential-free Compose
 configuration. Final read-only original-snapshot/history and absence-of-owned-
 resources checks also passed (`.local/task10/preservation-final.log`, exit 0).
+Those checks preceded the later authorized reset; validation/resilience were not
+rerun merely because the environment was recreated.
+
+## User-authorized fresh-local acceptance — 2026-11-10
+
+Only the previously missing fresh-local acceptance was executed, on the same
+Darwin arm64 host and Docker Desktop Linux arm64 daemon. No kind identity-boundary
+change, VM installation, Docker-context switch, broad Docker cleanup or Compose
+reset occurred. No application/test/config code changes were needed.
+
+Before deletion, the worktree-local mode-600 kubeconfig/context, original
+kube-system UID `91d1ae13-a854-471e-a044-040a669f28ef` and exact control-plane
+Docker kind label `temporal-demo` were reverified. There were no active experiment
+processes/tunnels, native scalers/HPAs or relay, and no running Temporal executions.
+The original completed witness still had its recorded hash. Its full available
+parent/child histories, app/Service/PVC/policy identities and credential identity
+only (not values) were captured to `.local/task10/recreation/pre-reset/`.
+Read-only pre-reset checks and history capture exited 0.
+
+Actual commands, all through the existing pinned tasks, all exit 0:
+
+- `mise run k8s:down`: 2 s, deleted only the explicitly authorized named cluster.
+- `mise run k8s:up`: 182 s, genuinely created a new cluster/PVC and provisioned the
+  pinned stack. Initial app images used clean committed source
+  `d926577695e404ff750d25b8541e49f31c04532f` (no implementation changes).
+- `mise run policies:install`: 2 s, required policies on the fresh stack.
+- `mise run test:kind-baseline`: 21 s, created the new completed-history witness
+  required by smoke's safety preflight, using the same fresh-run prerequisite as
+  CI. This is fresh fixture initialization, not a repeat of retained resilience
+  or full validation.
+- `mise run smoke`: 171 s including fixture deployment and successful rollback;
+  actual diamond test 142.16 s (Go package 142.697 s).
+
+Command elapsed values are whole-second shell observations, not subsecond
+benchmarks. Raw logs, exits and elapsed files are under
+`.local/task10/recreation/{down,up,policies,seed-baseline,smoke-fresh}.*`.
+
+New identities:
+
+- kube-system UID `d3a21c85-e0a9-431e-ac0b-6fe597facfeb`;
+- bound PostgreSQL PVC UID `4c8de2e2-9a4f-4cd6-a474-41a2e87489b6`, volume
+  `pvc-4c8de2e2-9a4f-4cd6-a474-41a2e87489b6`;
+- new immutable Secret UID `150b327e-3ce2-456d-8b1e-ad3583ca8615`, resourceVersion
+  `460`. Its identity was unchanged across the ordinary fresh smoke.
+
+The old witness returned HTTP **404** on the new healthy API before seeding new
+history (`fresh-boundary.log`, exit 0; `old-history-http-status` and
+`old-history-response.json`). **Loss of the old cluster's histories/PVC was
+expected and explicitly authorized.** Do not claim their old identities or
+history survived this reset. Old raw proof remains on the host, not in Temporal.
+The new verified UID was selected only after confirming the newly created owned
+cluster; the worktree-local task environment was updated, not global kubeconfig.
+
+Fresh combined smoke proof: `.local/task10-smoke-Gkmtgsul`, with actual histories,
+created UID ledger, exact fresh-baseline before/after comparisons and restore log.
+It passed exact registration/hash checks, zero actual Pods, full diamond command/
+payload/queue/order/result assertions, body400/no phantom run, durable replay
+across completion/restart/registry change and eventual zero. Desired-A-replica
+activation was sampled at 1.104 s; combined all-worker zero wait after replay
+checks was 111.602 s. These have the same limited measurement definitions as
+above, not Pod-Ready latency or independent worker cooldowns. Cached workflow and
+activity poller counts were 1/1 for each worker while actual Pods were zero.
+
+The fresh seed witness
+`run-405e7ae4861bd2fe761d1b1e18638c771fb3e4d40ef2c85c27b19114f949e157` /
+`01a1c78d-b7a9-7f0a-862d-fcfd46fa6c17` retained hash
+`f22fa961095286cfac3f3787b6155c7c6dfef015b882dbc7e9e5199c8b4c0fd0`
+across this ordinary smoke. That is a **new-cluster** preservation claim only.
+
+Final read-only health/process checks exited 0 (`final-health.*`,
+`final-process-check.*`): recreated Temporal/PostgreSQL and all five fixed
+application Deployments healthy, both policies Ready, new PVC/Secret preserved
+across smoke, no test-owned scaler/HPA/discovery RBAC/relay or tunnels/processes
+remaining. Smoke cleanup also established no running executions and unchanged
+fresh witness hash. The cluster is left running in its restored fixed-replica,
+static-registry baseline, with four generated registrations and policies ready
+for future explicit combined tests. The fresh Pod inventory records one early
+KEDA operator restart; it is currently Ready, and neither provisioning nor smoke
+failed. No further teardown was performed.
