@@ -23,6 +23,8 @@ import (
 	sdklog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -94,7 +96,15 @@ func retry(ctx context.Context, delay time.Duration, attempt func(context.Contex
 }
 
 func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.Logger) error {
-	return run(ctx, role, c, logger, client.DialContext, worker.New)
+	return run(ctx, role, c, logger, client.DialContext, worker.New, inClusterClient)
+}
+
+func inClusterClient() (kubernetes.Interface, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	return kubernetes.NewForConfig(config)
 }
 
 // Keep external SDK construction at the boundary so lifecycle tests exercise
@@ -102,14 +112,31 @@ func Run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 func run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.Logger,
 	dial func(context.Context, client.Options) (client.Client, error),
 	newWorker func(client.Client, string, worker.Options) worker.Worker,
+	newKubernetes func() (kubernetes.Interface, error),
 ) (result error) {
 	logger = logger.With("role", role, "worker", c.WorkerName, "taskQueue", c.TaskQueue, "namespace", c.TemporalNamespace)
 	var provider registry.Provider
 	var err error
+	discovery, stopDiscovery := context.WithCancel(ctx)
+	defer stopDiscovery()
+	discoveryErr := make(chan error, 1)
+	discoveryDone := make(chan struct{})
 	if role == "orchestrator" {
-		provider, err = registry.LoadStatic(c.RegistryFile)
-		if err != nil {
-			return err
+		switch c.RegistryMode {
+		case "kubernetes":
+			kc, err := newKubernetes()
+			if err != nil {
+				return err
+			}
+			live := registry.NewKubernetes(kc, c.WorkerNamespaceSelector)
+			provider = live
+			go func() { defer close(discoveryDone); discoveryErr <- live.Run(discovery) }()
+			defer func() { stopDiscovery(); <-discoveryDone }()
+		default:
+			provider, err = registry.LoadStatic(c.RegistryFile)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	h := &health{}
@@ -197,6 +224,8 @@ func run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 		logger.Info("shutdown requested")
 		return nil
 	case err := <-httpErr:
+		return err
+	case err := <-discoveryErr:
 		return err
 	}
 }

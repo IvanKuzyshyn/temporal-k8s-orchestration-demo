@@ -42,6 +42,19 @@ jobs:
         run: |
           mise run apps:deploy-scaling
           mise run test:scaling
+      - name: Live registry lifecycle, pre-start protection and least-privilege RBAC
+        shell: bash
+        run: |
+          mise run apps:deploy-discovery
+          trap '
+            rc=$?
+            if [[ -f .local/task9/static-baseline/identity ]]; then
+              mise exec -- bash scripts/discovery.sh restore || rc=1
+            fi
+            exit "$rc"
+          ' EXIT
+          mise run test:registry
+          mise run test:rbac
       - name: Destructive reset ONLY on this disposable runner (including idempotent down)
         run: |
           mise run k8s:down

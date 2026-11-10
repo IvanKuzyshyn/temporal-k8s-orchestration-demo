@@ -108,6 +108,18 @@ run = "bash scripts/scaling.sh test"
 description = "Install native KEDA scaling, bootstrapping zero only on first installation"
 run = "bash scripts/scaling.sh deploy"
 
+[tasks."apps:deploy-discovery"]
+description = "Deploy explicit live registry mode after policy readiness, with fixed workers and scoped rollback"
+run = "bash scripts/discovery.sh deploy"
+
+[tasks."test:registry"]
+description = "Uncached live registry lifecycle, invalid pre-start protection, keyed replay and permission recovery"
+run = "bash scripts/discovery.sh test"
+
+[tasks."test:rbac"]
+description = "Uncached actual orchestrator impersonation allow/deny checks for every registry scope and verb"
+run = "bash scripts/discovery.sh rbac"
+
 [tasks."test:kind-persistence"]
 run = "bash scripts/kind-integration.sh persistence"
 

@@ -8,6 +8,10 @@
       "tag":{"type":"string","pattern":"^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$","not":{"enum":["latest"]}}
     }},
     "replicas":{"const":1},
+    "registry":{"type":"object","additionalProperties":false,"required":["mode","namespaceSelector"],"properties":{
+      "mode":{"enum":["static","kubernetes"]},
+      "namespaceSelector":{"type":"string","minLength":1}
+    }},
     "scaling":{"type":"object","additionalProperties":false,"required":["enabled","bootstrapZero","pollingInterval","cooldownPeriod","includeRunningWorkflowCount"],"properties":{
       "enabled":{"type":"boolean"},"bootstrapZero":{"type":"boolean"},
       "pollingInterval":{"type":"integer","minimum":1},"cooldownPeriod":{"type":"integer","minimum":1},

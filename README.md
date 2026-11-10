@@ -1,12 +1,12 @@
 # Temporal orchestration demo
 
 Go + Temporal dependency-aware workflows: `worker-a → worker-b/worker-c → worker-d`.
-A body-free HTTP request snapshots a validated static graph; each worker returns
+A body-free HTTP request snapshots a validated worker graph; each worker returns
 only its identity. Compose runs four always-on workers; **it does not emulate
 KEDA or Kyverno**. The kind baseline runs the same static graph across five
 application namespaces. An [isolated native KEDA scaling experiment](docs/autoscaling.md)
-adds zero-to-one workers while retaining the static registry. Dynamic discovery
-and registration policies remain later stages.
+adds zero-to-one workers while retaining the static registry. A separate explicit
+live-discovery phase reads Kyverno registrations with namespace-scoped RBAC.
 
 ## Prerequisites
 
@@ -100,6 +100,53 @@ Manual reads:
 KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal-demo get pods -A
 mise run kind:diagnostics       # scoped status/app logs; failure-only credential-redacted schema evidence
 ```
+
+## Explicit live Kubernetes registry phase
+
+After the fixed-replica baseline is ready, run these **sequentially**, not during
+scaling/policy lifecycle experiments or while other workflows are running:
+
+```sh
+mise run policies:install
+mise run apps:deploy-discovery
+mise run test:registry            # dedicated registry_integration tag; uncached
+mise run test:rbac                # actual impersonation allow/deny; uncached
+mise exec -- bash scripts/discovery.sh restore
+```
+
+`values-discovery.yaml` selects Kubernetes mode with four fixed workers, not the
+combined autoscaling acceptance scenario. Deployment checks both owned policies
+Ready, builds/loads the application images, validates a buffered render against
+the graph and API, and applies exactly those bytes. It retains an ignored static
+rollback snapshot in `.local/task9/static-baseline`; restore before deploying a
+new discovery experiment. Test failures restore that baseline automatically;
+cleanup failures are errors. No infrastructure, credentials or storage are reset.
+
+The orchestrator's service account lives only in `temporal-demo-orchestrator`.
+Its ClusterRole reads only Namespaces. Each worker namespace independently grants
+ConfigMap get/list/watch; it cannot read ConfigMaps cluster-wide, Services or
+Secrets, or write resources. Namespace label
+`temporal-demo.io/worker-namespace=true` selects discovery but grants **no access**.
+New labeled namespaces require an explicit per-namespace Role/RoleBinding; absent
+or revoked grants fail the entire registry closed until recovery. Only ConfigMaps
+labeled `temporal-demo.io/registration=true` are decoded, with strict schema-1
+metadata and canonical execution validation through the shared `plan.Build`.
+Source UID is diagnostic, excluded from the plan hash. Registrations are trusted
+Kyverno output, **not cryptographically verified Service provenance**.
+
+Initial/relist caches must all synchronize. Authorization errors fail closed;
+transient watch disruption has at most 30 seconds of recovery grace, measured
+from disconnection, not the age of the last resource event. Idle healthy watches
+never become stale. Watches reauthorize on bounded reconnection (10-second
+server timeout, 15-second client deadline), and recover without process restart.
+`/workers` exposes synchronization, diagnostics and the current canonical hash.
+A synchronized invalid/empty graph remains ready for diagnostics but new starts
+return 503 without a Temporal execution; incomplete discovery is also unready.
+Existing idempotency keys still replay their original durable run/hash/result.
+
+There is **no atomic deployment or intended-rollout inference**: a partially
+reconciled graph can itself be valid. Deployment automation must wait for its
+expected worker names **and hash**, not merely readiness or a nonempty registry.
 
 Infrastructure inputs live in `k8s/infrastructure/`:
 `kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
@@ -254,19 +301,19 @@ most5s), with at most one second of shell-clock granularity; failure diagnostics
 run afterward. Slow or unavailable endpoints cannot multiply the budget by the
 per-request timeout.
 
-`services/orchestrator/cmd/orchestrator` wires chi, static registry and parent
-poller. `services/worker/cmd/worker` registers the fixed child workflow and
+`internal/process` wires chi, the selected registry and parent poller; the
+`services/orchestrator/cmd/orchestrator` entry point owns the lifecycle boundary. `services/worker/cmd/worker` registers the fixed child workflow and
 identity-configured activity. Environment: `TEMPORAL_ADDRESS` (default
 `temporal:7233`), `TEMPORAL_NAMESPACE` (`default`), `REGISTRY_MODE` (`static`),
 `REGISTRY_FILE` (`deploy/config/workers.json`), `WORKER_NAME`, `TASK_QUEUE`,
 `ACTIVITY_DURATION` (`5s`, positive and less than60s), `HTTP_ADDR` (orchestrator
 `:8080`, worker `:8081`). Queues must match `<worker>.v1.temporal` or the parent
-`orchestrator.v1.temporal`. `WORKER_NAMESPACE_SELECTOR` is reserved; selecting
-`REGISTRY_MODE=kubernetes` fails explicitly until Task9 rather than pretending
-that static registration is dynamic discovery. No registry watchers here.
+`orchestrator.v1.temporal`. `REGISTRY_MODE=kubernetes` uses in-cluster credentials
+and `WORKER_NAMESPACE_SELECTOR` (default
+`temporal-demo.io/worker-namespace=true`); static mode/Compose are unchanged.
 
-Liveness is independent of Temporal; readiness requires SDK worker Start/polling
-and a bounded Temporal health RPC. Startup connection retries are bounded to90s
+Liveness is independent of Temporal; readiness requires SDK worker Start/polling,
+a bounded Temporal health RPC, and registry synchronization for the orchestrator. Startup connection retries are bounded to90s
 and obey cancellation. SIGTERM marks unready and grants SDK worker Stop30s;
 Compose grace40s includes HTTP shutdown. Logs use JSON slog through the SDK
 adapter, including queue and activity/workflow/run IDs. SDK fatal errors atomically

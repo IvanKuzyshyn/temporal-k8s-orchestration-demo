@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/plan"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 type Config struct {
@@ -24,7 +25,7 @@ func Load(role string, getenv func(string) string) (Config, error) {
 		}
 		return fallback
 	}
-	c := Config{TemporalAddress: value("TEMPORAL_ADDRESS", "temporal:7233"), TemporalNamespace: value("TEMPORAL_NAMESPACE", "default"), RegistryMode: value("REGISTRY_MODE", "static"), RegistryFile: value("REGISTRY_FILE", "deploy/config/workers.json"), WorkerNamespaceSelector: getenv("WORKER_NAMESPACE_SELECTOR"), WorkerName: getenv("WORKER_NAME")}
+	c := Config{TemporalAddress: value("TEMPORAL_ADDRESS", "temporal:7233"), TemporalNamespace: value("TEMPORAL_NAMESPACE", "default"), RegistryMode: value("REGISTRY_MODE", "static"), RegistryFile: value("REGISTRY_FILE", "deploy/config/workers.json"), WorkerNamespaceSelector: value("WORKER_NAMESPACE_SELECTOR", "temporal-demo.io/worker-namespace=true"), WorkerName: getenv("WORKER_NAME")}
 	var err error
 	c.ActivityDuration, err = time.ParseDuration(value("ACTIVITY_DURATION", "5s"))
 	if err != nil || c.ActivityDuration <= 0 || c.ActivityDuration >= 60*time.Second {
@@ -33,7 +34,9 @@ func Load(role string, getenv func(string) string) (Config, error) {
 	switch c.RegistryMode {
 	case "static":
 	case "kubernetes":
-		return Config{}, fmt.Errorf("REGISTRY_MODE=kubernetes is not wired until Task 9")
+		if _, err := labels.Parse(c.WorkerNamespaceSelector); err != nil {
+			return Config{}, fmt.Errorf("invalid WORKER_NAMESPACE_SELECTOR: %w", err)
+		}
 	default:
 		return Config{}, fmt.Errorf("unknown REGISTRY_MODE")
 	}
