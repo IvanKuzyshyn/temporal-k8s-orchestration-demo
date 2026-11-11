@@ -29,6 +29,7 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
+go test -race -count=1 -tags=integration,resilience_integration -run '^Test(HistoryAssertionsSensitivity|ActivityPodSelection|WorkerRestoreKeepsNativeReplicas|SnapshotCleanupFailurePaths|StartIntentOwnership)$' ./tests/integration
 for script in scripts/*.sh; do
   bash -n "$script"
 done
@@ -119,6 +120,14 @@ run = "bash scripts/discovery.sh test"
 [tasks."test:rbac"]
 description = "Uncached actual orchestrator impersonation allow/deny checks for every registry scope and verb"
 run = "bash scripts/discovery.sh rbac"
+
+[tasks.smoke]
+description = "Uncached combined live-discovery diamond from zero, histories/replay and return to zero"
+run = "bash scripts/smoke.sh"
+
+[tasks."test:resilience"]
+description = "Bounded snapshot isolation and recovery on the retained stack, with exact rollback"
+run = "bash scripts/smoke.sh resilience"
 
 [tasks."test:kind-persistence"]
 run = "bash scripts/kind-integration.sh persistence"

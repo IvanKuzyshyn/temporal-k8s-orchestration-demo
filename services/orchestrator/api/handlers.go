@@ -31,7 +31,12 @@ func (h handlers) start(w http.ResponseWriter, r *http.Request) {
 		}
 		key = keys[0]
 	}
-	run, err := h.service.Start(r.Context(), key)
+	// Bound SDK reconnect/retry time so an unavailable Temporal connection
+	// produces a truthful HTTP response before the client gives up. Body/key
+	// validation above still rejects malformed requests without Temporal calls.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	run, err := h.service.Start(ctx, key)
 	if err != nil {
 		respondError(w, err)
 		return
@@ -40,7 +45,9 @@ func (h handlers) start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handlers) get(w http.ResponseWriter, r *http.Request) {
-	run, err := h.service.Get(r.Context(), chi.URLParam(r, "workflowID"))
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	run, err := h.service.Get(ctx, chi.URLParam(r, "workflowID"))
 	if err != nil {
 		respondError(w, err)
 		return
