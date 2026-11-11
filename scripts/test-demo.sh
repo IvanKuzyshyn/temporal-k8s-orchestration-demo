@@ -21,4 +21,4 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mise run up
 export DEMO_ROOT="$ROOT" DEMO_API_URL="http://127.0.0.1:${API_FORWARD_PORT:-18080}"
-go test -tags=integration -count=1 -run '^TestDemoLifecycle$' -v -timeout=20m ./tests/integration
+go test -tags=demo_integration -count=1 -run '^TestDemoLifecycle$' -v -timeout=20m ./tests/integration
