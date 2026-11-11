@@ -1,8 +1,8 @@
 # Worker registration policies
 
-Task 8 installs admission and registration infrastructure only. The orchestrator
-continues using `REGISTRY_MODE=static`; Kubernetes registry wiring and its
-read-only service account permissions belong to Task 9.
+Policy installation generates registrations but does not switch the orchestrator
+from static mode. Explicit live discovery uses the namespace-scoped reader below;
+combined discovery/scaling is a separate temporary [acceptance path](experiments.md).
 
 ## Run
 
@@ -100,4 +100,55 @@ replace those grants. No orchestrator or Secret permissions are added.
 Re-run `policies:install` after namespace/RBAC setup, and run the live lifecycle
 test on the exact pinned controller build. These tests do not certify cleanup
 across controller downtime, policy drift, or arbitrary version upgrades. Local
-macOS/arm64 proof is not a substitute for the controller-owned Linux CI run.
+macOS/arm64 proof is not a substitute for current-head Linux CI; historical
+Task10 Linux PR lifecycle success is recorded in [versions](versions.md).
+
+## Enable the observed registry, independently of scaling
+
+After the baseline and policy lifecycle pass, with no active executions/scalers:
+
+```sh
+mise run apps:deploy-discovery
+mise run test:registry
+mise run test:rbac
+mise exec -- bash scripts/discovery.sh restore
+```
+
+Deployment verifies policies Ready, snapshots the static baseline, builds/loads
+current apps, validates the graph and live API, and applies the same buffered
+render. Four workers remain fixed at one. The retained rollback snapshot is
+`.local/task9/static-baseline`; restore it before another deployment. Failures
+attempt native restoration; cleanup errors remain task failures.
+
+The orchestrator's own service account has Namespace get/list/watch via a
+ClusterRole, and ConfigMap get/list/watch through a Role/RoleBinding in **each**
+worker namespace. It cannot read ConfigMaps cluster-wide, Services or Secrets,
+or write resources. A new labeled namespace needs its own grant. Label changes
+start/stop namespace watchers; missing/revoked grants fail synchronization closed
+instead of publishing a silently incomplete authorized subset. Live tests exercise
+namespace add/remove, RoleBinding loss/recovery and actual impersonation allow/deny.
+
+Only registration-labeled ConfigMaps are strictly decoded. Source metadata is
+validated structurally, but source UID is diagnostic and excluded from the plan
+hash; the reader does not independently read Services to authenticate provenance.
+Namespace labelers and Service/registration writers are trusted. Namespace labels
+select scope, not security isolation. Chart-default Kyverno permissions described
+above are broader than the orchestrator's least-privilege grants.
+
+Every selected cache must synchronize, including reconnect/relist barriers. Watch
+requests use a 10-second server timeout and 15-second client deadline; transient
+watch loss has at most 30 seconds' recovery grace from disconnection. Idle healthy
+watches never expire simply because no resource changed. Authorization errors
+fail closed without waiting for that grace. Recovery does not require API restart.
+
+Snapshots are copied/immutable and validated through the shared plan builder.
+Invalid or empty observed graphs block new starts; existing keyed executions
+still replay from durable history. Already-started plans do not change when
+registrations do. `/workers` exposes synced/plan/hash/problems for diagnosis.
+
+**Wait for the intended names and hash.** Reconciliation is eventual, not an
+atomic rollout: a partially registered graph can itself be valid. Ready/nonempty
+alone cannot establish that the complete intended deployment is visible. Never
+remove/upgrade workers incompatibly during active runs; snapshot immutability
+does not keep their Deployments alive. [Architecture](architecture.md) explains
+the three complementary validation layers.

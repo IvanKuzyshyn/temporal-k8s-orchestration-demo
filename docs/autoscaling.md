@@ -9,7 +9,7 @@ Deployment. Only KEDA creates HPAs; our chart creates none.
 
 ```sh
 mise run apps:deploy-scaling
-mise run test:scaling
+SCALING_SKIP_LONG=0 mise run test:scaling
 ```
 
 Use this worktree's existing `.local/kubeconfig`, context
@@ -124,3 +124,14 @@ PR CI). Required local acceptance includes the long experiment. For focused deve
 `SCALING_TEST_RUN=TestInFlightScaleDown mise run test:scaling` still restores and
 verifies the baseline; omit the filter for full acceptance. Latest-head
 Linux results are controller-observed, not inferred from local ARM64 tests.
+Historical Task10 PR CI passed the bounded selection but skipped in-flight
+shutdown; current Task11 local full scaling (including that case) passed in
+816 seconds. Exact results and provenance are in [experiments](experiments.md).
+
+After both isolated scaling and discovery/RBAC pass and restore their baseline,
+`mise run smoke` temporarily combines native scaling with live discovery. It
+requires explicit verified `TASK10_TRUSTED_UID` and a completed-history witness;
+it restores fixed/static mode on exit rather than leaving a combined deployment.
+Do not run `k8s:up` or another experiment while KEDA owns live replicas. Five-second
+polling and 120-second cooldown are not promises of five-second Pod readiness
+or guaranteed uninterrupted work.

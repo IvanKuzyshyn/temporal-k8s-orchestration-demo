@@ -1,321 +1,230 @@
-# Temporal orchestration demo
+# Temporal Kubernetes orchestration demo
 
-Go + Temporal dependency-aware workflows: `worker-a → worker-b/worker-c → worker-d`.
-A body-free HTTP request snapshots a validated worker graph; each worker returns
-only its identity. Compose runs four always-on workers; **it does not emulate
-KEDA or Kyverno**. The kind baseline runs the same static graph across five
-application namespaces. An [isolated native KEDA scaling experiment](docs/autoscaling.md)
-adds zero-to-one workers while retaining the static registry. A separate explicit
-live-discovery phase reads Kyverno registrations with namespace-scoped RBAC.
+A body-free HTTP request snapshots a validated diamond graph:
+`worker-a → worker-b/worker-c → worker-d`. Temporal runs the parent and children;
+each child/activity carries **only worker identity**, not business data.
+Compose is the fast static, always-on development path. Kind is the integration
+path for native KEDA scale-to-zero and Kyverno registration discovery.
 
 ## Prerequisites
 
-- Docker Engine/Desktop with Compose v2+ (`--wait`, health/dependency conditions),
-  Linux containers, roughly 8 GB available memory and 4+ CPUs recommended.
-- [mise](https://mise.jdx.dev/), Git, Bash, curl, jq and OpenSSL on the host.
-- `mise install` installs pinned Go1.27.3, kind0.33.0, kubectl1.35.8,
-  Helm4.3.1, without changing global tool configuration.
-  Race tests need a C compiler
-  (Xcode command-line tools on macOS; GCC on Linux).
+- Git, Bash, curl, jq, OpenSSL, [mise](https://mise.jdx.dev/), and Docker
+  Engine/Desktop with Linux containers and Compose v2+ supporting `--wait`.
+- A C compiler for Go race tests (Xcode command-line tools on macOS, GCC on Linux).
+- `mise install` installs Go **1.27.3**, kind **0.33.0**, kubectl **1.35.8**,
+  Helm **4.3.1**, and Kyverno CLI **1.19.2**. Use `mise run`/`mise exec`, not
+  whichever versions happen to be on the global PATH.
+- Network access for initial tools, Go modules, digest-pinned images and
+  checksum-pinned chart archives. Cached validation needs no live cluster or
+  Docker daemon; cold-cache validation is not network-offline.
+- Roughly 4–6 available CPUs and 8–12 GB container-runtime memory is a starting
+  resource estimate, **not** a measured minimum or startup guarantee.
 
-Images are pinned by release **and multi-platform digest**. Go build/runtime,
-PostgreSQL16.15, Temporal server/admin-tools1.32.0, and independently pinned
-UI2.48.0 have Linux ARM64 and amd64 manifests. Darwin ARM64 uses Docker's
-Linux ARM64 VM, not Darwin container images. See [versions/evidence](docs/versions.md).
-No SQLite, Temporal dev server, hosted Temporal, or auto-setup image is used.
+Tested host/container architectures, exact pins and evidence provenance are in
+[versions](docs/versions.md). Darwin ARM64 uses Linux ARM64 Docker containers.
+Linux amd64 hosted CI is a separate gate; other platforms are not certified.
+This is a localhost demo without production authentication, HA or external backup.
 
-## Quick start
+## Compose quick start — no Kubernetes
+
+From a clean checkout with Docker running:
 
 ```sh
 mise install
-mise run validate              # Go/race/vet, Helm, full graph, Compose config; no cluster/daemon
-mise run compose:up            # builds BOTH app images, waits for all services
-mise run compose:smoke         # real diamond + completed/restarted keyed replay + body400
-mise run compose:persistence   # isolated restart/replacement/schema/down-up/reset proof
+mise run validate              # formatting, race tests, vet, policies, chart/graph, Compose config
+mise run compose:up            # builds both app images and waits for readiness
+mise run compose:smoke         # real diamond, zero-body contract and durable keyed replay
+mise run compose:persistence   # isolated project: restarts/replacement/schema/reset
 ```
 
-`compose:up` creates **ignored** `deploy/.env` with a random PostgreSQL password
-and owner-only permissions if absent. Never commit it. `deploy/.env.example`
-is a nonsecret template, not a working credential. To prepare your own file:
-`(umask 077; printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > deploy/.env)`.
-Keep the same password with an existing volume; changing it does not change an
-already initialized PostgreSQL user's password. Do not print rendered Compose
-configuration or infrastructure logs that might contain credentials.
-`docker compose -f deploy/compose.yaml config --quiet` works without real creds;
-the validation-only defaults are **not** the supported runtime startup path.
-
-Local endpoints (published on **127.0.0.1 only**):
-- API: <http://127.0.0.1:8080> (`/healthz`, `/readyz`, `/workers`, `/runs`).
-- Temporal gRPC: `127.0.0.1:7233`.
-- Temporal UI: <http://127.0.0.1:8088>.
+Default localhost endpoints: API <http://127.0.0.1:8080>, Temporal gRPC
+`127.0.0.1:7233`, UI <http://127.0.0.1:8088>. Compose does **not** emulate
+KEDA/Kyverno: all four workers keep running with a static registry.
 
 ```sh
 curl -fsS -X POST -H 'Idempotency-Key: my-demo-run' http://127.0.0.1:8080/runs
-# GET /runs/<workflowId> until status=completed; no body or Content-Type needed.
-# Same key returns the original durable workflowId/runId/planHash/result.
+# Copy workflowId from the response, then poll:
+workflow_id='paste-workflowId-here'
+curl -fsS "http://127.0.0.1:8080/runs/$workflow_id"
+curl -fsS http://127.0.0.1:8080/workers
 ```
 
-Deduplication lasts within Temporal history retention (default namespace72h).
-Unexpected body bytes return400. Results contain only sorted `workerName` values;
-there is no business payload. See [API contract](docs/api.md).
+Send **zero body bytes**, not `{}` or whitespace. No Content-Type is needed.
+The same key returns the original workflow/run/hash and available result, even
+following completion, API restart or registry changes. A 503/lost response can
+follow Temporal acceptance: retry the **same key**, not a fresh key. Unkeyed
+retries can create additional work. Deduplication lasts only within retained
+Temporal history (default namespace retention 72 hours). See [API](docs/api.md).
 
-## Isolated kind baseline quick start
+`compose:up` creates ignored, owner-only `deploy/.env` with a random PostgreSQL
+password if absent. Keep it paired with the project volume; do not source it,
+print it, rotate it behind retained data, or commit it. Configuration checks use
+`compose:config` (`config --quiet`), not credential-rendering `config` output.
 
-Leave an existing Compose stack or unrelated kind cluster running; these tasks
-never invoke Compose up/down/reset or change global Kubernetes/Docker contexts.
-From **this checkout**, with Docker running:
+### Separate project or occupied ports
+
+Choose a previously unused project name and its own credential file. Never reuse
+another checkout's retained project/credentials for a clean test.
+
+```sh
+export COMPOSE_PROJECT_NAME=temporal-demo-my-test
+export COMPOSE_ENV_FILE="$PWD/.local/my-test.env"
+export COMPOSE_API_PORT=0 COMPOSE_TEMPORAL_PORT=0 COMPOSE_UI_PORT=0
+mise run compose:up
+export COMPOSE_API_URL="http://$(mise exec -- bash scripts/compose.sh api-address)"
+mise run compose:smoke
+```
+
+Port 0 allocates available **127.0.0.1** ports; export the API URL **after up and
+before smoke**. For UI/gRPC, use `docker compose --env-file "$COMPOSE_ENV_FILE"
+-p "$COMPOSE_PROJECT_NAME" -f deploy/compose.yaml port ui 8080` (or `temporal
+7233`). Keep these environment variables for all operations on that project.
+
+```sh
+mise run compose:down          # containers/network removed; history volume retained
+mise run compose:up            # same credentials + volume preserve history
+RESET_CONFIRM=1 mise run compose:reset  # DESTRUCTIVE: this project's history volume
+```
+
+`compose:persistence` creates/removes its own unique child project, credentials
+and volume; its destructive reset never targets the parent or ordinary demo.
+Do not use global Docker prune. `compose:cleanup` is CI-only and requires its
+exact `temporal-demo-ci-<run-id>-<attempt>` identity.
+
+## Kind quick start — fixed replicas, static registry first
+
+The named cluster is **temporal-demo**, not an arbitrary current context.
+Leave unrelated clusters and Compose projects alone. Unset a foreign
+`KUBECONFIG`; tasks use only this checkout's ignored `.local/kubeconfig` and
+explicit context `kind-temporal-demo`, without changing global contexts.
+An existing cluster requires the matching worktree-local file; do not silently
+adopt another cluster or copy an unverified kubeconfig.
 
 ```sh
 mise install
-mise run validate:manifests     # no cluster: Helm lint/render, complete graph
-mise run k8s:up                # create if absent, apply infrastructure, build/load/validate/apply apps
-mise run validate:k8s          # strict API dry-run; requires already ready owned cluster/Namespaces/CRDs
-mise run test:kind-validation   # real valid/invalid API controls; verifies nothing persisted
-mise run test:kind-baseline     # diamond + Kubernetes-only orchestrator restart/keyed replay
-mise run test:kind-persistence  # replace Temporal/PG Pods + safe schema rerun, retain history
-mise run validate              # same cumulative command used by all PR workflows
+mise run validate:manifests    # cluster-independent Helm/values-schema/full graph checks
+mise run k8s:up                # create if absent; infrastructure then build/load/validate/apply apps
+mise run validate:k8s          # strict dry-run on ALREADY ready API/Namespaces/CRDs
+mise run test:kind-validation  # native/custom positive, wrong-type and unknown-kind controls
+mise run test:kind-baseline    # seeds completed history, diamond + API restart/keyed replay
+mise run test:kind-persistence # replaces PG/Temporal Pods and safely reruns schemas
 ```
 
-Run mutating tasks **sequentially**, especially `k8s:up` and persistence:
-they share the schema Job. Static workers remain at one replica. Namespace
-`temporal-demo-orchestrator` holds the API/parent poller. Each of `worker-a`
-through `worker-d` has its own `temporal-demo-worker-<letter>` namespace labeled
-`temporal-demo.io/worker-namespace: "true"`. Values in `k8s/worker-helm-chart/values.yaml`
-define each identity/dependency once; Namespace names, Service annotations,
-Deployment queues and the static registry are generated together. No discovery
-RBAC, Kyverno policies/registrations or KEDA ScaledObjects are enabled. Temporal
-uses `temporal.temporal.svc.cluster.local:7233` across namespaces, namespace
-`default`, with separate PostgreSQL default and visibility databases.
+Run mutating tasks **sequentially and exclusively**, not while other executions
+or experiments are active. `k8s:up` reruns bootstrap Jobs and restores the static,
+fixed-replica application configuration; do not run it against an active scaling
+experiment. A rerun preserves PostgreSQL history, not arbitrary experiment specs.
 
-The kubeconfig is **ignored and worktree-local**: `.local/kubeconfig`.
-Every kubectl operation selects `kind-temporal-demo`; creation/deletion explicitly
-selects `temporal-demo` and the local kubeconfig. No `use-context` or global
-kubeconfig write occurs. Tasks reject a foreign `KUBECONFIG`; unset it first,
-or set it to this checkout's absolute `.local/kubeconfig`. An existing cluster
-requires that file's current context to match. Do not copy kubeconfigs between
-checkouts or adopt another cluster. There is no UID/Docker-ownership framework.
-Manual reads:
+The orchestrator runs in `temporal-demo-orchestrator`; each worker runs in its
+own `temporal-demo-worker-a` through `-d` namespace. Temporal's independent
+namespace is `default`, endpoint `temporal.temporal.svc.cluster.local:7233`.
+Baseline workers are fixed at one, with no discovery RBAC or app ScaledObjects.
+
+In separate terminals, foreground tunnels bind localhost only:
 
 ```sh
-KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl --context kind-temporal-demo get pods -A
-mise run kind:diagnostics       # scoped status/app logs; failure-only credential-redacted schema evidence
-```
-
-## Explicit live Kubernetes registry phase
-
-After the fixed-replica baseline is ready, run these **sequentially**, not during
-scaling/policy lifecycle experiments or while other workflows are running:
-
-```sh
-mise run policies:install
-mise run apps:deploy-discovery
-mise run test:registry            # dedicated registry_integration tag; uncached
-mise run test:rbac                # actual impersonation allow/deny; uncached
-mise exec -- bash scripts/discovery.sh restore
-```
-
-`values-discovery.yaml` selects Kubernetes mode with four fixed workers, not the
-combined autoscaling acceptance scenario. Deployment checks both owned policies
-Ready, builds/loads the application images, validates a buffered render against
-the graph and API, and applies exactly those bytes. It retains an ignored static
-rollback snapshot in `.local/task9/static-baseline`; restore before deploying a
-new discovery experiment. Test failures restore that baseline automatically;
-cleanup failures are errors. No infrastructure, credentials or storage are reset.
-
-The orchestrator's service account lives only in `temporal-demo-orchestrator`.
-Its ClusterRole reads only Namespaces. Each worker namespace independently grants
-ConfigMap get/list/watch; it cannot read ConfigMaps cluster-wide, Services or
-Secrets, or write resources. Namespace label
-`temporal-demo.io/worker-namespace=true` selects discovery but grants **no access**.
-New labeled namespaces require an explicit per-namespace Role/RoleBinding; absent
-or revoked grants fail the entire registry closed until recovery. Only ConfigMaps
-labeled `temporal-demo.io/registration=true` are decoded, with strict schema-1
-metadata and canonical execution validation through the shared `plan.Build`.
-Source UID is diagnostic, excluded from the plan hash. Registrations are trusted
-Kyverno output, **not cryptographically verified Service provenance**.
-
-Initial/relist caches must all synchronize. Authorization errors fail closed;
-transient watch disruption has at most 30 seconds of recovery grace, measured
-from disconnection, not the age of the last resource event. Idle healthy watches
-never become stale. Watches reauthorize on bounded reconnection (10-second
-server timeout, 15-second client deadline), and recover without process restart.
-`/workers` exposes synchronization, diagnostics and the current canonical hash.
-A synchronized invalid/empty graph remains ready for diagnostics but new starts
-return 503 without a Temporal execution; incomplete discovery is also unready.
-Existing idempotency keys still replay their original durable run/hash/result.
-
-There is **no atomic deployment or intended-rollout inference**: a partially
-reconciled graph can itself be valid. Deployment automation must wait for its
-expected worker names **and hash**, not merely readiness or a nonempty registry.
-
-Infrastructure inputs live in `k8s/infrastructure/`:
-`kind.yaml` is **kind input, never an apply resource**; `temporal.yaml` contains
-PostgreSQL/PVC, config/scripts, schema and namespace Jobs, server and UI;
-KEDA and Kyverno's pinned charts provide complete controllers/CRDs/RBAC. Each
-chart is downloaded only on cache miss, SHA256-verified on **every** use, then
-rendered with its small `*-values.yaml`; the API validates infrastructure during
-installation from the same temporary manifest. Both use
-`scripts/render-controller.sh keda|kyverno`. Cold chart caches require network
-access; fast validation needs no live cluster or Docker daemon.
-`k8s-up.sh` applies labeled phases: PostgreSQL readiness → completed schemas →
-Temporal readiness → completed default-namespace bootstrap → UI; then controller
-CRDs (server-side apply), establishment and controllers/webhook CAs. Bootstrap
-Jobs are recreated on reruns, not databases/storage. Both images are built directly
-with Docker, tagged with the source revision (plus a unique dirty suffix), loaded
-into kind. Applications render once: complete graph validation runs before any
-application-bootstrap mutation, then labeled application Namespaces are applied
-as a prerequisite (dry-run Namespace creation does not persist them). The
-**same rendered bytes** pass `kubectl apply --dry-run=server --validate=strict`
-using the owned kubeconfig/context before workload apply. Validation failure stops
-workload mutation; up is not entirely mutation-free. Helm only renders; it does
-not install releases.
-See [render provenance and reproduction](k8s/infrastructure/README.md), including
-migration from the prior Helm-managed baseline and excluded Helm lifecycle hooks.
-
-Forwarding is localhost-only and distinct from Compose's occupied ports:
-
-```sh
-mise run api:forward            # foreground, http://127.0.0.1:18080; Ctrl-C stops only this tunnel
-mise run ui:forward             # separate terminal, http://127.0.0.1:18088
-# API_FORWARD_PORT=19080 mise run api:forward  # override when needed
-# UI_FORWARD_PORT=19088 mise run ui:forward
+mise run api:forward            # http://127.0.0.1:18080; Ctrl-C stops this tunnel
+mise run ui:forward             # http://127.0.0.1:18088
+# API_FORWARD_PORT=19080 mise run api:forward  # when occupied
 curl -fsS -X POST -H 'Idempotency-Key: kind-demo' http://127.0.0.1:18080/runs
 ```
 
-Integration tasks allocate their own available localhost API port atomically and
-clean up their exact child PID and temporary files on success/failure/signals.
-No manually running tunnel is required; no process is killed by name/pattern.
+Tests allocate their own localhost tunnels and clean their exact child PIDs.
+No manually running tunnel is required. Do not kill processes by name/pattern.
 
-### kind persistence and deletion warning
+### Isolated integration phases, then combined acceptance
 
-`k8s:up` reruns reuse the existing **immutable**
-`temporal/postgres-credentials` Secret. The StatefulSet's `data-postgres-0` PVC
-must stay paired with that Secret. A retained PVC without its Secret fails closed
-instead of generating a new unusable password. Never delete/rotate that Secret
-behind retained data. Local passwords are not committed or printed. Schema Jobs
-use the same pinned1.32.0 tools/scripts as Compose, safely initializing/updating
-both databases without overwrite/drop. Readiness and bootstrap are bounded.
-
-Ordinary Pod replacement and schema reruns preserve exact completed workflow ID,
-run ID, plan hash and identity-only result. The automated persistence test checks
-different Pod UIDs and unchanged PVC UID/bound volume plus Secret UID/version.
-This is local PVC persistence, **not host-external backup or production HA**.
+After baseline/persistence, run in this order:
 
 ```sh
-mise run k8s:down               # DESTRUCTIVE: ONLY temporal-demo, including ALL its PVC history
-# To reset deliberately: down, then k8s:up. Old histories will be gone.
+mise run policies:install
+mise run test:policies-integration
+mise run apps:deploy-scaling
+SCALING_SKIP_LONG=0 mise run test:scaling
+mise run apps:deploy-discovery
+mise run test:registry
+mise run test:rbac
+mise exec -- bash scripts/discovery.sh restore
 ```
 
-Deletion is explicit and idempotent; integration tests leave the cluster/history
-available for inspection. Only disposable Linux CI exercises down/down/up and
-checks old history returns404, followed by a fresh diamond. Local retained history
-is not reset. CI unconditionally attempts scoped deletion; Validate and Compose
-coverage remains.
-Darwin ARM64 Docker acceptance and Linux amd64 CI acceptance are separate gates;
-see [versions/evidence](docs/versions.md). Controller installation/readiness is
-**not** proof of KEDA no-poller scaling or Kyverno admission/registration cleanup.
+Policy lifecycle uses temporary namespaces; scaling restores fixed workers;
+discovery retains its static rollback snapshot until explicit restore (failures
+also attempt restoration). Check cleanup errors before proceeding.
+[Discovery](docs/discovery.md) explains eventual consistency, intended-set waits
+and trust; [autoscaling](docs/autoscaling.md) explains native replica ownership
+and why cooldown/running counts cannot guarantee uninterrupted activities.
 
-## Complete rendered worker graph validation
+Only after these phases pass, use the temporary combined smoke/recovery path.
+Verify the node's Docker kind label and the known owned kube-system UID before
+setting the safety variable; a current context alone is **not** a trust check.
+On a newly created cluster record this identity from that owned creation.
 
 ```sh
-mise exec -- go run ./cmd/validate-graph < rendered.yaml
-mise run test:manifests         # extraction tests + real CLI fixture exit/output assertions
+mise exec -- docker inspect temporal-demo-control-plane \
+  --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}'
+KUBECONFIG="$PWD/.local/kubeconfig" mise exec -- kubectl \
+  --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}'
+export TASK10_TRUSTED_UID='<verified owned kube-system UID>'
+mise run smoke
+mise run test:resilience
 ```
 
-Provide the **complete** multi-document YAML/JSON deployment set, including
-Namespace declarations; Kubernetes `List` items (also nested Lists) are expanded.
-Namespaces labeled `temporal-demo.io/worker-namespace: "true"` select graph scope.
-Services registered with annotation `temporal-worker: "true"` require an explicit,
-declared namespace; registrations outside labeled namespaces are ignored. Queues
-and workflow types are derived from Service identity, and the unchanged
-`temporal-worker-run-after` annotation uses the shared dependency parser.
+Both public tasks require a completed-history witness, fixed/static baseline,
+Ready policies and no existing discovery RBAC/scalers or running executions.
+They install a **temporary combined** overlay and restore the baseline, not a
+persistent combined deployment. They preserve current cluster history, canonical
+Services, PVC and immutable Secret identities. They record exact owned execution
+intents before POST so ambiguous acceptance can be reconciled safely. Proof
+paths printed as `.local/task10-*` describe the script lineage, not the date or
+task that executed them. See [experiments and 14-criterion map](docs/experiments.md).
 
-The CLI prints only the canonical plan hash on success, or a diagnostic to stderr
-and exit1 on invalid input. Duplicate Namespace or Service definitions are
-ambiguous and rejected, even if identical or disabled. Shared graph validation
-rejects unknown/self/cyclic dependencies, globally duplicate worker identities
-and multiple workers in one namespace. This is **graph/source validation**, not a
-general Kubernetes/CRD schema check, admission test, or proof of runnable workers.
-No cluster or Docker runtime is needed. `mise run validate:manifests` additionally
-runs actual Helm lint/render, the CLI over the **complete** application render,
-and verifies/renders both pinned controller charts. These fast checks are included
-in cumulative `mise run validate`. Helm's `values.schema.json` remains enforced.
-Kubernetes structural/custom-resource validation belongs to the actual kind API
-and admission webhooks, not a local downloaded JSON-schema catalog.
-`validate:k8s` only validates against an already ready owned cluster: it never
-creates, resets, installs or bootstraps anything. Missing cluster, Namespaces or
-CRDs fail. Kind CI runs it and `test:kind-validation` after startup readiness.
-The latter first accepts valid native Deployment, KEDA ScaledObject and Kyverno
-ClusterPolicy controls, then rejects wrong field types and an unknown kind;
-all fixtures are dry-run only and checked absent. No active scaler or policy is
-installed. These checks do not prove later scaling or policy lifecycle behavior.
+### Storage and destructive boundary
 
-## Lifecycle, history and destructive reset
+Compose named volumes and kind's local PVC preserve histories across ordinary
+PostgreSQL/Temporal replacement. Matching server/admin-tools **1.32.0** initialize
+and migrate separate default/visibility databases using `postgres12` before
+server startup; namespace bootstrap completes before app pollers. Safe schema
+reruns do not mean arbitrary downgrades or manual SQL changes are supported.
+
+Kind reuses immutable `temporal/postgres-credentials` with `data-postgres-0`.
+A retained PVC without its Secret fails closed instead of rotating the password.
+Never delete that Secret to repair authentication. Local PVCs are not backups.
 
 ```sh
-mise run compose:down          # removes project containers/network; PRESERVES history
-mise run compose:up            # retained history still queryable
-RESET_CONFIRM=1 mise run compose:reset  # DESTRUCTIVE: removes project's PG volume/history
+mise run k8s:down              # DESTRUCTIVE: ONLY temporal-demo, ALL local PVC/history
+# Deliberate reset: down, then k8s:up; old histories must be absent.
 ```
 
-One-shot schema setup initializes/migrates **both** `temporal` and
-`temporal_visibility` with matching1.32.0 `postgres12` schemas before server
-startup. Setup safely reruns without overwriting existing versions/history.
-Namespace bootstrap checks server health and creates/checks `default` before
-application pollers start. PostgreSQL uses a project-scoped named volume.
-This is local single-instance persistence, **not** a production HA/backup solution.
+Down is idempotent but not an ordinary test cleanup command. Verify exact named
+ownership and no unrelated active executions before deliberate deletion.
+Authorized local reset evidence and disposable CI resets are distinct from
+ordinary preservation evidence. Tests normally leave a healthy retained stack.
 
-`compose:persistence` uses a fresh unique project, random localhost ports and its
-own temporary credential file/volume. It proves restart, container replacement,
-schema rerun and down/up preserve exact workflow/run/result, then invokes the
-explicit reset task **only on that fixture**, expects old history404, and completes
-a fresh run. Its trap removes its containers/volume even on assertion failure.
-It never resets the ordinary demo. Leave ordinary `deploy/.env` and its volume
-alone unless intentionally resetting. No global Docker prune/context changes.
+## Validation, diagnostics and navigation
 
-Change host ports via `COMPOSE_API_PORT`, `COMPOSE_TEMPORAL_PORT`,
-`COMPOSE_UI_PORT`; set `COMPOSE_API_URL` for smoke if changing API port.
-`COMPOSE_PROJECT_NAME` isolates multiple demos; `COMPOSE_ENV_FILE` selects a
-separate local credential file. Don't reuse another project's name.
+`validate:manifests` lints/renders the application chart, validates its **complete**
+intended graph, and verifies/renders pinned controller archives. It cannot discover
+unavailable CRD schemas offline. `validate:k8s` requires the ready owned API and
+never bootstraps. Startup validates the graph before application Namespace
+creation, then strict server-dry-runs and applies the **same render**. Real API
+controls reject unknown kinds and wrong native/custom field types without
+persisting fixtures. Helm renders charts; no Helm releases, local CRD catalog,
+kubeconform or `k8s/apps` bundle is used. See [infrastructure](k8s/infrastructure/README.md).
 
-## Processes, builds and checks
+- API not ready: inspect `/workers` diagnostics and Temporal readiness. Invalid
+  graphs may be synchronized/ready for diagnostics yet reject new starts.
+- Missing workers: inspect namespace labels, generated ConfigMaps, policy Ready
+  conditions and each namespace's RoleBinding. Wait for intended names **and hash**;
+  nonempty/valid alone can be a partially reconciled rollout.
+- Stuck at zero: inspect ScaledObject Ready/Active and KEDA operator errors;
+  cached Temporal pollers are not living Pods. Discovery is not capacity proof.
+- `mise run kind:diagnostics`: scoped status/events/app logs and redacted schema
+  failure evidence. `mise exec -- bash scripts/compose.sh diagnostics`: scoped
+  Compose app logs/status. Do not dump environment, Secrets or raw SQL logs.
+- On failure preserve printed proof directories and restoration errors. Do not
+  reset storage, widen permissions or increase timeouts to hide a failed test.
 
-- `mise run images:build`: builds nonroot orchestrator and shared worker images.
-  Clean source uses the full Git SHA; dirty builds get a unique explicit
-  `local-<timestamp>-<random>` tag, recorded in ignored `.local/compose-image-tag`.
-  `compose:up` rebuilds (with Docker cache) so edits cannot silently use a stale
-  SHA or `latest`. Build contexts exclude secrets/local state.
-- `mise run compose:config`: configuration validation without rendered secrets.
-- `bash scripts/compose.sh diagnostics`: bounded project-scoped status and only
-  application logs, no environment dumps or raw infrastructure logs.
-- PR workflows reuse the local setup-mise action and these same tasks on Linux
-  amd64. `mise run compose:cleanup` requires an explicit
-  `COMPOSE_PROJECT_NAME=temporal-demo-ci-<run-id>-<attempt>`; it checks fixture
-  discovery, attempts every matching fixture and the job's normal project even
-  after failures, and returns an aggregate failure. It never defaults to resetting
-  the ordinary demo. CI evidence is distinct from local host evidence; see versions.md.
-
-Smoke readiness/completion each have an elapsed `SMOKE_WAIT_SECONDS` budget
-(default180), not180 attempts. Requests are capped at the remaining budget (at
-most5s), with at most one second of shell-clock granularity; failure diagnostics
-run afterward. Slow or unavailable endpoints cannot multiply the budget by the
-per-request timeout.
-
-`internal/process` wires chi, the selected registry and parent poller; the
-`services/orchestrator/cmd/orchestrator` entry point owns the lifecycle boundary. `services/worker/cmd/worker` registers the fixed child workflow and
-identity-configured activity. Environment: `TEMPORAL_ADDRESS` (default
-`temporal:7233`), `TEMPORAL_NAMESPACE` (`default`), `REGISTRY_MODE` (`static`),
-`REGISTRY_FILE` (`deploy/config/workers.json`), `WORKER_NAME`, `TASK_QUEUE`,
-`ACTIVITY_DURATION` (`5s`, positive and less than60s), `HTTP_ADDR` (orchestrator
-`:8080`, worker `:8081`). Queues must match `<worker>.v1.temporal` or the parent
-`orchestrator.v1.temporal`. `REGISTRY_MODE=kubernetes` uses in-cluster credentials
-and `WORKER_NAMESPACE_SELECTOR` (default
-`temporal-demo.io/worker-namespace=true`); static mode/Compose are unchanged.
-
-Liveness is independent of Temporal; readiness requires SDK worker Start/polling,
-a bounded Temporal health RPC, and registry synchronization for the orchestrator. Startup connection retries are bounded to90s
-and obey cancellation. SIGTERM marks unready and grants SDK worker Stop30s;
-Compose grace40s includes HTTP shutdown. Logs use JSON slog through the SDK
-adapter, including queue and activity/workflow/run IDs. SDK fatal errors atomically
-mark the process unready and block new starts, including a fatal racing startup;
-the process joins SDK shutdown outside the callback and returns the fatal cause.
+[Architecture](docs/architecture.md) covers scheduling, snapshots and safety;
+[API](docs/api.md) covers exact HTTP schemas; [versions](docs/versions.md) separates
+pins from executed platform evidence; [experiments](docs/experiments.md) maps all
+acceptance criteria, current results, CI coverage and known limits.
