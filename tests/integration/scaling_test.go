@@ -259,16 +259,15 @@ func (h *harness) own(run client.WorkflowRun) {
 	// A temporary exact-ID list lets the shell trap repeat native SDK cleanup
 	// after a test-process timeout; it never discovers or adopts unrelated runs.
 	if path := os.Getenv("SCALING_RUNS_FILE"); path != "" {
-		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		h.g.Expect(err).NotTo(gomega.HaveOccurred())
-		err = json.NewEncoder(file).Encode(executionRef{run.GetID(), run.GetRunID()})
-		closeErr := file.Close()
-		h.g.Expect(err).NotTo(gomega.HaveOccurred())
-		h.g.Expect(closeErr).NotTo(gomega.HaveOccurred())
+		h.g.Expect(recordExecution(path, executionRef{ID: run.GetID(), RunID: run.GetRunID()})).To(gomega.Succeed())
 	}
 }
 
 func (h *harness) finish(run client.WorkflowRun) {
+	if run.GetID() == "" || run.GetRunID() == "" {
+		h.t.Errorf("refuse owned cleanup without exact workflow/run identity")
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	d, err := h.c.DescribeWorkflowExecution(ctx, run.GetID(), run.GetRunID())
@@ -292,6 +291,10 @@ func (h *harness) finish(run client.WorkflowRun) {
 		}
 		if child := event.GetChildWorkflowExecutionStartedEventAttributes(); child != nil {
 			execution := child.WorkflowExecution
+			if execution.GetWorkflowId() == "" || execution.GetRunId() == "" {
+				h.t.Errorf("refuse child cleanup without exact history identity")
+				continue
+			}
 			info, err := h.c.DescribeWorkflowExecution(ctx, execution.WorkflowId, execution.RunId)
 			if err != nil {
 				h.t.Errorf("owned child cleanup: %v", err)

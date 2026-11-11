@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,15 +215,17 @@ func TestAcceptanceDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	dec := json.NewDecoder(f)
-	for {
-		var ref executionRef
-		err := dec.Decode(&ref)
-		if err == io.EOF {
-			break
-		}
+	h.executionDiagnostics(f, dir)
+}
+
+func (h *harness) executionDiagnostics(f *os.File, dir string) {
+	for _, ref := range h.executionRefs(f) {
+		ref, found, err := h.resolveOwnedExecution(ref, f.Name())
 		if err != nil {
-			t.Fatal(err)
+			h.t.Errorf("diagnostic ownership reconciliation: %v", err)
+		}
+		if !found {
+			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		a := &acceptanceHarness{harness: h, ctx: ctx}

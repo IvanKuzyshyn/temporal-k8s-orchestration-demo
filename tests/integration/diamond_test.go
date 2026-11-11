@@ -137,14 +137,25 @@ func (h *acceptanceHarness) waitPlan(p plan.Plan) {
 }
 
 func (h *acceptanceHarness) start(key string) runs.Run {
+	h.g.Expect(runs.ValidKey(key)).To(gomega.BeTrue(), "acceptance starts require an exact test key")
+	sum := sha256.Sum256([]byte(key))
+	ref := executionRef{ID: fmt.Sprintf("run-%x", sum), Pending: true}
+	path := os.Getenv("SCALING_RUNS_FILE")
+	h.g.Expect(recordExecution(path, ref)).To(gomega.Succeed(), "persist exact start intent before POST")
+	// Registered before any response assertion, including transport/decode errors.
+	// A process timeout leaves the same pending intent for the shell fallback.
+	h.t.Cleanup(func() { h.cleanupExecution(ref, path) })
 	code, b, err := h.request("POST", "/runs", key, nil)
 	h.g.Expect(err).NotTo(gomega.HaveOccurred())
 	h.g.Expect(code).To(gomega.Equal(202), string(b))
 	var r runs.Run
 	h.g.Expect(json.Unmarshal(b, &r)).To(gomega.Succeed())
-	h.g.Expect(r.WorkflowID).NotTo(gomega.BeEmpty())
+	h.g.Expect(r.WorkflowID).To(gomega.Equal(ref.ID), "response must match our exact keyed start intent")
 	h.g.Expect(r.RunID).NotTo(gomega.BeEmpty())
-	h.own(h.c.GetWorkflow(h.ctx, r.WorkflowID, r.RunID))
+	ref.RunID = r.RunID
+	ref.Pending = false
+	h.g.Expect(recordExecution(path, ref)).To(gomega.Succeed(), "persist accepted execution pin")
+	h.t.Logf("owned execution %s/%s", ref.ID, ref.RunID)
 	return r
 }
 func (h *acceptanceHarness) replay(key string, original runs.Run) {

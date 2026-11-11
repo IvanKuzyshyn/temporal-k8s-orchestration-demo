@@ -345,3 +345,47 @@ separate external 240-second validation interruption has no established final
 exit and is neither a product failure nor a passing run. Prior author validation
 is historical evidence, not validation of the new failure paths. Controller
 re-review and exact-head cumulative Linux CI remain separate pending gates.
+
+## Final review fix — ambiguous start ownership
+
+Whole-branch review identified a separate failed-start ownership gap: HTTP 503
+or a lost response can follow Temporal acceptance. The existing API ambiguity
+and same-key recovery contract remain unchanged. Acceptance starts now durably
+write their exact key-derived workflow-ID intent before POST, register cleanup
+before response assertions, and pin a validated successful response. Failed
+responses remain failed tests. Fresh bounded direct Temporal reconciliation
+resolves a pending intent to an exact run ID before existing parent/history-owned
+child cleanup or diagnostics. NotFound retains the pending intent; unavailable
+is an error, never proof of absence. The existing shell fallback reads the same
+ledger, prefers persisted pins over old pending rows, and never terminates with
+an empty run ID. Partial JSONL rows remain reported failures without suppressing
+cleanup of other durable records. No production code, API contract, pins,
+workflow input, replica ownership or lifecycle timing changed.
+
+Offline regressions exercise the real start assertions, cleanup callbacks,
+ledger reader, reconciliation and history collection with external HTTP/SDK
+boundary doubles. Genuine RED showed unpersisted accepted-503/lost-response
+ownership, POST despite failed intent persistence, and rejection of pending-only
+fallback rows; a separate diagnostic RED showed missing recovered-run evidence.
+GREEN covers 18 cases including process death before response, NotFound then
+later visibility, unavailable lookup, invalid identities, failed termination,
+legacy pins, partial rows and read-only parent/child diagnostics. The regression
+also observes the actual ledger at SDK cleanup/history boundaries to require a
+durable pin before use. All new cases join the existing uncached selection.
+
+Final author `mise run validate` passed once (105 s). Public smoke passed once
+(202 s including fixture work, diamond 151.78 s), with proof under
+`.local/task10-smoke-ZwXN9JGT`. Additional targeted SDK checks used pending-only
+copies of that now-completed, test-owned execution's intent: actual shell-fallback
+selection and diagnostics resolved exactly its recorded run ID and retained
+parent plus four child histories without starting new work. This verifies the
+two changed readers against real Temporal; the full live resilience suite was
+not repeated because production recovery behavior is unchanged and both build
+tag variants exercise the shared ownership regressions offline.
+
+Raw proof is `.local/task10/final-fix/`. Exact application/Service restoration,
+new-cluster witness/PVC/Secret/policy preservation, zero running executions,
+Ready fixed/static baseline and absence of test resources/tunnels were verified.
+The retained recreated-cluster UID is unchanged; no reset occurred. Scoped final
+re-review, controller verification and actual exact-head Linux CI remain pending;
+this is not a Task10-complete or PR-ready claim.
