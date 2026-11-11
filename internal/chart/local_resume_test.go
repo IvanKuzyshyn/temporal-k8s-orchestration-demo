@@ -25,14 +25,14 @@ func TestLocalResumeTunnels(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"local.sh", "kind-common.sh"} {
+			for _, name := range []string{"local.sh", "kind-common.sh", "wait-graph.sh"} {
 				b, err := os.ReadFile("../../scripts/" + name)
 				if err != nil {
 					t.Fatal(err)
 				}
 				write("scripts/"+name, string(b))
 			}
-			for name, body := range map[string]string{"node-id": "owned-id\n", "initialized": "", "plan-hash": "expected-hash\n"} {
+			for name, body := range map[string]string{"node-id": "owned-id\n", "initialized": "", "expected-workers.json": `[{"name":"worker-a","taskQueue":"worker-a.v1.temporal","workflowType":"ExampleChildWorkflow","dependencies":[]}]`} {
 				write(".local/lifecycle/"+name, body)
 			}
 			write(".local/kubeconfig", "fixture")
@@ -64,8 +64,10 @@ elif [[ $* == *apply* ]]; then exit 92
 fi
 `)
 			write("tools/curl", `#!/usr/bin/env bash
-if [[ $* == */workers ]]; then
- echo '{"synced":true,"plan":{"hash":"expected-hash","nodes":[{"name":"worker-a"},{"name":"worker-b"},{"name":"worker-c"},{"name":"worker-d"}]},"problems":[]}'
+if [[ $* == */graph ]]; then
+ while (($#)); do case "$1" in -o) file=$2; shift 2;; *) shift;; esac; done
+ jq -n --slurpfile nodes "$STATE/.local/lifecycle/expected-workers.json" '{synced:true,valid:true,plan:{nodes:$nodes[0]},problems:[]}' > "$file"
+ printf 200
 else echo ok; fi
 `)
 			run := func(mode string) (string, error) {

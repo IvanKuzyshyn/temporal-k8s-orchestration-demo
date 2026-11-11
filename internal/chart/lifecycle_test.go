@@ -32,7 +32,7 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 				for _, dir := range []string{"scripts", "tools", ".local"} {
 					g.Expect(os.MkdirAll(filepath.Join(root, dir), 0700)).To(gomega.Succeed())
 				}
-				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq", "scripts/policies-install.sh"} {
+				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq", "scripts/policies-install.sh", "scripts/expected-workers.jq"} {
 					b, err := os.ReadFile("../../" + path)
 					g.Expect(err).NotTo(gomega.HaveOccurred(), "direct rerunnable up entrypoint")
 					g.Expect(os.WriteFile(filepath.Join(root, path), b, 0600)).To(gomega.Succeed())
@@ -70,6 +70,13 @@ exec "` + realHelm + `" "$@"`,
 while [[ $1 == --* ]]; do case "$1" in --*=*) shift;; *) shift 2;; esac; done
 if [[ $1 == config ]]; then echo kind-temporal-demo; exit; fi
 if [[ $1 == auth ]]; then echo yes; exit; fi
+if [[ $1 == create && $* == *'--dry-run=client'* ]]; then
+ for w in worker-a worker-b worker-c worker-d; do
+  printf '{"kind":"Namespace","metadata":{"name":"temporal-demo-%s","labels":{"temporal-demo.io/worker-namespace":"true"}}}\n' "$w"
+  printf '{"kind":"Service","metadata":{"name":"%s","namespace":"temporal-demo-%s","annotations":{"temporal-worker":"true"}}}\n' "$w" "$w"
+ done
+ exit
+fi
 if [[ $1 == get && $2 == deployments ]]; then
  if [[ $SCENARIO == full-retry ]]; then echo '{"items":[{"metadata":{"name":"worker-a","namespace":"temporal-demo-worker-a"}}]}'; else echo '{"items":[]}'; fi; exit
 fi

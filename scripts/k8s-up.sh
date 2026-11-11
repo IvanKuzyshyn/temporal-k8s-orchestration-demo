@@ -153,6 +153,9 @@ if [[ $mode == full ]]; then
   helm template temporal-demo k8s/worker-helm-chart -f "$values" \
     --set-string "images.tag=$tag" --kube-version 1.35.8 >"$work/steady.yaml"
   mkdir -p .local/lifecycle
+  k create --dry-run=client -f "$work/steady.yaml" -o json \
+    | jq -se -f scripts/expected-workers.jq >.local/lifecycle/expected-workers.json.tmp
+  mv .local/lifecycle/expected-workers.json.tmp .local/lifecycle/expected-workers.json
   go run ./cmd/validate-graph <"$work/steady.yaml" >.local/lifecycle/plan-hash
   bash scripts/validate-k8s.sh "$work/steady.yaml"
   k apply set-last-applied -f "$work/steady.yaml" --create-annotation=true
