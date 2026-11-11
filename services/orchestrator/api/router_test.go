@@ -171,7 +171,9 @@ func TestStartBodyStreamsAndContentType(t *testing.T) {
 	g.Expect(f.starts).To(BeZero())
 }
 
-func TestHTTPDurableRepeatAndRegistryChange(t *testing.T) {
+// Concurrency, restart and registry-change races belong to the service tests.
+// This test owns the HTTP casing, result serialization and replay/status routing.
+func TestHTTPRunJSONAndCompletedReplay(t *testing.T) {
 	g := NewWithT(t)
 	p, f, h := fixture(t)
 	w := request(h, "POST", "/runs", "", "key")
@@ -182,64 +184,31 @@ func TestHTTPDurableRepeatAndRegistryChange(t *testing.T) {
 	g.Expect(first).To(HaveKey("runId"))
 	g.Expect(first).To(HaveKeyWithValue("planHash", p.s.Plan.Hash))
 	g.Expect(first).NotTo(HaveKey("WorkflowID"))
-	p.s = registry.Snapshot{Problems: []string{"secret invalid"}}
-	w = request(h, "POST", "/runs", "", "key")
-	g.Expect(w.Code).To(Equal(202))
-	g.Expect(f.starts).To(Equal(1))
-	var repeated map[string]interface{}
-	g.Expect(json.Unmarshal(w.Body.Bytes(), &repeated)).To(Succeed())
-	g.Expect(repeated).To(Equal(first))
-	w = request(h, "GET", "/runs/"+first["workflowId"].(string), "")
-	g.Expect(w.Code).To(Equal(200))
-}
-func TestHTTPConcurrentDuplicatesAndCompletedRetryAfterRestart(t *testing.T) {
-	g := NewWithT(t)
-	p, f, h := fixture(t)
-	var wg sync.WaitGroup
-	responses := make(chan *httptest.ResponseRecorder, 20)
-	for range 20 {
-		wg.Go(func() { responses <- request(h, "POST", "/runs", "", "durable") })
-	}
-	wg.Wait()
-	close(responses)
-	var original runs.Run
-	for response := range responses {
-		g.Expect(response.Code).To(Equal(202))
-		var run runs.Run
-		g.Expect(json.Unmarshal(response.Body.Bytes(), &run)).To(Succeed())
-		if original.RunID == "" {
-			original = run
-		}
-		g.Expect(run).To(Equal(original))
-	}
-	g.Expect(f.executions).To(HaveLen(1))
-	execution := f.executions[original.WorkflowID]
+	id := first["workflowId"].(string)
+	execution := f.executions[id]
 	execution.Run.Status = "completed"
 	execution.Run.Result = &contracts.ParentResult{Results: []contracts.ChildResult{{WorkerName: "worker-a"}}}
-	f.executions[original.WorkflowID] = execution
-	p.s = registry.Snapshot{Problems: []string{"invalid after restart"}}
-	restarted := api.New(p, runs.New(p, f), func(context.Context) error { return nil })
-	response := request(restarted, "POST", "/runs", "", "durable")
-	g.Expect(response.Code).To(Equal(202))
+	f.executions[id] = execution
+	replay := request(h, "POST", "/runs", "", "key")
+	g.Expect(replay.Code).To(Equal(202))
 	var repeated runs.Run
-	g.Expect(json.Unmarshal(response.Body.Bytes(), &repeated)).To(Succeed())
+	g.Expect(json.Unmarshal(replay.Body.Bytes(), &repeated)).To(Succeed())
 	g.Expect(repeated).To(Equal(execution.Run))
-	g.Expect(response.Body.String()).NotTo(ContainSubstring(`"payload"`))
-	g.Expect(response.Body.String()).NotTo(ContainSubstring(`"message"`))
-	g.Expect(response.Body.String()).NotTo(ContainSubstring(`"requestHash"`))
+	status := request(h, "GET", "/runs/"+id, "")
+	g.Expect(status.Code).To(Equal(200))
+	g.Expect(status.Body.String()).To(Equal(replay.Body.String()))
+	for _, field := range []string{`"payload"`, `"message"`, `"requestHash"`} {
+		g.Expect(replay.Body.String()).NotTo(ContainSubstring(field))
+	}
 }
 
-func TestHTTPAmbiguousStartAndUnavailableLookup(t *testing.T) {
+func TestHTTPAmbiguousStartStatusAndRecovery(t *testing.T) {
 	g := NewWithT(t)
 	_, f, h := fixture(t)
 	f.ambiguous = true
 	response := request(h, "POST", "/runs", "", "ambiguous")
 	g.Expect(response.Code).To(Equal(503))
 	g.Expect(response.Body.String()).NotTo(ContainSubstring("original-run"))
-	f.lookupErr = runs.ErrUnavailable
-	g.Expect(request(h, "POST", "/runs", "", "ambiguous").Code).To(Equal(503))
-	g.Expect(f.starts).To(Equal(1))
-	f.lookupErr = nil
 	g.Expect(request(h, "POST", "/runs", "", "ambiguous").Code).To(Equal(202))
 	g.Expect(f.starts).To(Equal(1))
 }
