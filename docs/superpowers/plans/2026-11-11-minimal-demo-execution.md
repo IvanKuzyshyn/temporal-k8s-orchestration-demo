@@ -27,7 +27,9 @@ not used as disposable fixtures. No merge to main is requested.
 - Final review added a post-validation deadline check so a response delayed past
   120 seconds cannot succeed. Its simulated-clock regression failed before the
   fix. Additional 422/connection/extra-worker/malformed-state cases cover the
-  planned polling matrix.
+  planned polling matrix. A second failing-first check ensures curl failure codes
+  survive timeout diagnostics, distinguishing connection failure from timeout
+  without printing arbitrary response/error bodies.
 - Fast tests use `-count=1` so Go's result cache cannot skip changed external
   shell/Helm/policy inputs. CI setup explicitly includes the pinned Kyverno CLI.
 - No subagent or independent-review tool was available. Review is self-review;

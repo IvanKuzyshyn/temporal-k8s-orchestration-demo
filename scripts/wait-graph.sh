@@ -13,6 +13,7 @@ trap 'rm -rf "$work"' EXIT
 start=$(date +%s)
 deadline=$((start + 120))
 code=000
+curl_status=0
 printf '{}\n' >"$work/response"
 : >"$work/error"
 while true; do
@@ -20,7 +21,12 @@ while true; do
   ((remaining > 0)) || break
   timeout=2
   ((remaining >= timeout)) || timeout=$remaining
-  code=$(curl -sS --max-time "$timeout" -o "$work/response" -w '%{http_code}' "$api/graph" 2>"$work/error") || code=000
+  if code=$(curl -sS --max-time "$timeout" -o "$work/response" -w '%{http_code}' "$api/graph" 2>"$work/error"); then
+    curl_status=0
+  else
+    curl_status=$?
+    code=000
+  fi
   if [[ $code == 200 ]] && jq -e --slurpfile expected "$expected" \
     '.synced == true and .valid == true and .problems == [] and (.plan.nodes | sort_by(.name)) == ($expected[0] | sort_by(.name))' "$work/response" >/dev/null 2>&1; then
     # A response (or validation) delayed beyond the deadline is not readiness.
@@ -41,5 +47,5 @@ jq --slurpfile expected "$expected" '
    missing:([$expected[0][].name] - [$actual[].name]),
    extra:([$actual[].name] - [$expected[0][].name]),
    mismatched:[$expected[0][] as $want | $actual[] | select(.name == $want.name and . != $want) | .name]}' "$work/response" >&2
-[[ $code != 000 ]] || echo 'Last graph request failed or timed out' >&2
+[[ $code != 000 ]] || echo "Last graph request failed or timed out (curl exit: $curl_status)" >&2
 exit 1

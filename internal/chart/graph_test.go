@@ -137,6 +137,9 @@ jq -n --slurpfile nodes "$STATE/expected.json" '{synced:true,valid:true,problems
 					t.Fatalf("did not retry: %s", calls)
 				}
 			}
+			if scenario == "slow" && !strings.Contains(string(out), "curl exit: 28") {
+				t.Fatalf("missing connection outcome: %s", out)
+			}
 			if scenario == "timeout" || scenario == "slow" {
 				if string(clock) != "120\n" {
 					t.Fatalf("unbounded elapsed clock: %s", clock)
