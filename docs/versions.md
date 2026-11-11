@@ -70,6 +70,8 @@ loads its own tags, without invoking Compose. Docker build contexts exclude
 credentials/local proof. The resilience relay has a test-specific Docker context
 allowlist and uses existing Go/Debian pins, not a production image/test switch.
 
+<a id="approved-staged-gate-and-evidence-map"></a>
+
 ## Executed platforms — keep the gates separate
 
 Current Task11 local execution: Darwin **arm64**, Docker Desktop daemon
