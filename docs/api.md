@@ -1,6 +1,9 @@
 # Orchestrator HTTP API
 
-Task 3 provides a chi handler and injectable Temporal gateway; executable server/configuration wiring belongs to Task 4. These examples describe that handler's contract, not an already running stack. The eventual local API address is `http://127.0.0.1:8080`.
+The running chi API and Temporal parent poller share the orchestrator process.
+Compose publishes `http://127.0.0.1:8080`; kind uses `mise run api:forward`
+at `http://127.0.0.1:18080`. See the [quick starts](../README.md). All endpoints
+are local-only and unauthenticated; no public ingress is configured.
 
 ## Start a run
 
@@ -29,9 +32,18 @@ A retry with the same key returns **202**, the **original** workflow ID/run ID/p
 
 New starts require a synchronized, nonempty, valid registry. The service copies the plan, rebuilds/validates execution identities, queues, workflow types, dependencies and cycles through the shared graph builder, and verifies the canonical plan/hash before starting. It never changes provider data. Parent execution starts use `ParentWorkflow`, queue `orchestrator.v1.temporal`, a 30-minute execution timeout, immutable input and **no workflow retry policy**.
 
-Deduplication lasts only while Temporal retains the execution history. Once retention expires or history is explicitly deleted, the key can create a new execution. There is no separate application idempotency database: durable metadata lives in Temporal's PostgreSQL-backed persistence when the runtime stack is deployed. These unit tests do not prove that infrastructure's persistence behavior.
+Deduplication lasts only while Temporal retains the execution history. Once retention expires or history is explicitly deleted, the key can create a new execution. There is no separate application idempotency database: durable metadata lives in
+Temporal's PostgreSQL-backed persistence. `compose:persistence` and
+`test:kind-persistence` verify replacement/schema-rerun preservation separately
+from handler unit tests. Explicit volume/PVC/cluster reset destroys that history.
 
-A failed lookup or ambiguous start timeout returns **503**, never an invented acceptance. A timeout may occur after Temporal accepted the workflow. Retry with the **same key** to discover the durable execution; an unkeyed retry may start additional work.
+Start and status operations have a **two-second context budget**, shortened by
+the request deadline. A failed lookup or ambiguous start timeout returns **503**,
+never invented acceptance. A timeout or lost HTTP response can occur **after
+Temporal accepted** the workflow. Retry with the **same key** to discover the
+durable execution; an unkeyed retry may start additional work. A 503 is not proof
+of absence. Acceptance tests persist exact key-derived start intent before POST
+and reconcile ambiguous ownership directly with Temporal before scoped cleanup.
 
 ## Inspect a run
 
@@ -62,13 +74,17 @@ Handler errors are JSON with a single `error` field and no sensitive internal de
 - **404**: `{"error":"run not found"}` — unknown run on GET.
 - **500**: `{"error":"internal error"}` — unexpected internal errors, including invalid durable metadata. No raw downstream error text is exposed.
 
-No authentication/public ingress or runtime configuration is introduced by this handler. Keep demo endpoints bound/forwarded to localhost when process wiring is added.
+Keep endpoints bound/forwarded to localhost. Liveness is independent of Temporal;
+process readiness additionally requires initialized SDK polling. A synchronized
+invalid graph may be ready for diagnostics but still rejects new starts. Discovery
+can expose a valid partial rollout: wait for the intended worker names **and hash**,
+not just ready/nonempty, before selecting a new plan.
 
 ## Local verification
 
 ```sh
-go test ./services/orchestrator/api ./services/orchestrator/runs
-go test -race ./services/orchestrator/...
+mise exec -- go test ./services/orchestrator/api ./services/orchestrator/runs
+mise exec -- go test -race ./services/orchestrator/...
 mise run validate
 ```
 

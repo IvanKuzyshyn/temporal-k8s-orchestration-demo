@@ -1,391 +1,300 @@
-# Combined acceptance and recovery experiments
+# Acceptance, recovery and evidence
 
-## Commands and prerequisites
+Use the [README quick starts](../README.md) for the operational path. This page
+explains what each proof establishes, where it ran, and what remains unverified.
+All mutating suites run sequentially on the dedicated owned kind cluster, with
+no unrelated active executions. Never fix a failed ordinary experiment by
+resetting storage, rotating credentials or broad workflow cleanup.
 
-Use the pinned tools with `mise`. This is application-only acceptance on an
-already deployed, owned kind stack, **not** a provisioning or reset command.
+## Reproduce the combined tests
 
-Prerequisites: PostgreSQL-backed Temporal with at least one completed history
-witness; five Ready fixed-replica application Deployments in their separate
-namespaces; the two installed Ready worker policies; canonical diamond Service
-annotations; no unrelated running Temporal executions; no preexisting discovery
-RBAC or ScaledObjects. Existing static scaling, policy, discovery, RBAC and
-persistence suites remain independent and unchanged.
-
-Explicitly verify the worktree-local kubeconfig, `kind-temporal-demo` context,
-`temporal-demo` Docker node ownership, and the expected kube-system UID before
-setting `TASK10_TRUSTED_UID`. Do not derive trust blindly from whichever cluster
-is currently selected. On a newly provisioned **disposable CI runner**, the
-workflow records the UID of the cluster that job just created. Never use this
-mechanism to adopt or reset a foreign cluster.
+Prerequisites: healthy PostgreSQL-backed Temporal; a completed history witness
+(`test:kind-baseline` on a fresh cluster); five Ready fixed/static apps in separate
+namespaces; canonical diamond Services; both worker policies Ready; no existing
+app ScaledObjects/discovery RBAC; isolated policy/scaling/discovery/RBAC suites
+already passed/restored. Verify local kubeconfig/context, Docker kind ownership
+and the known owned kube-system UID before selecting the safety variable.
 
 ```sh
 export TASK10_TRUSTED_UID='<independently verified owned kube-system UID>'
 mise run smoke
 mise run test:resilience
-mise run validate
 ```
 
-The public tasks render the combined discovery/scaling overlay, validate the
-complete graph through `plan.Build` and strict API validation, build uniquely
-tagged application images, and install only app Deployments and absent test-owned
-RBAC/Scalers. They do not reapply original Services, Namespaces or ConfigMaps.
-KEDA retains native HPA ownership after the initial zero-replica bootstrap.
+These tasks build uniquely tagged images, graph/API-validate a combined overlay,
+and temporarily change only apps and absent owned RBAC/scalers. Original Services,
+Namespaces and ConfigMaps are not reapplied. Initial zero-replica bootstrap hands
+off to native KEDA/HPA ownership. Both commands restore fixed/static baseline,
+including app specs/ownership metadata and Service annotations, with UID guards.
+They preserve current PVC, immutable Secret metadata, policies, Temporal Pod and
+completed history. The Deployment controller's revision counter naturally advances.
+Restoration/diagnostic failures propagate nonzero; keep the proof directory.
 
-`scripts/smoke.sh` supplies bounded localhost API/Temporal tunnels and mandatory
-`DEMO_API_URL`, `TEMPORAL_ADDRESS`, `DEMO_KUBE_CONTEXT=kind-temporal-demo` and
-`SCALING_ROOT`. Tests fail if these are absent, rather than silently skipping.
-API tunnels are reopened after Pod replacement. The diamond has a ten-minute
-whole-test deadline; deployment/build and bounded safety rollback are separate
-fixture work. The sequential long suite has a thirty-minute process deadline;
-production parent/child/activity/retry/scaler timeouts are not increased.
+Each start writes an exact key-derived intent **before POST**. Cleanup is
+registered before response assertions, pins validated run identities durably,
+and reconciles ambiguous 503/lost responses directly with Temporal. NotFound
+retains pending intent, unavailability is not absence, and no termination uses
+an empty run ID. Only exact owned parent/history-derived child runs are cleaned;
+there is no server-wide workflow cleanup. A successful response is not invented
+for a failed HTTP assertion.
 
-Proof directories are printed as `.local/task10-smoke-*` and
-`.local/task10-resilience-*`. Keep them, especially on failure. They contain
-actual execution IDs, full protobuf-JSON parent/child histories, exact original
-app snapshots, created-resource UID ledgers, pre/post preservation comparisons,
-raw build/test/restore logs and final exit status. On failure,
-`scripts/collect-diagnostics.sh <proof-directory>` also captures scoped Pod events,
-app logs, ScaledObject conditions, registrations and available histories. It
-never reads Secrets or SQL logs. Credential **identity** capture is limited to
-UID/resourceVersion/immutable, never credential values. Diagnostics failures and
-rollback failures propagate as nonzero exits.
+Printed proof folders `.local/task10-smoke-*` / `.local/task10-resilience-*`
+are the scripts' stable naming, not a claim these runs occurred in Task10.
+They retain commands' test/build/restore logs, original specs, created UID ledgers,
+parent/child protobuf-JSON histories, ownership ledgers, identity comparisons and
+exit. Failure diagnostics collect scoped events/app logs/scaler/registry/history,
+not credentials or SQL logs. The top-level test budgets are 10 minutes for the
+diamond and 30 minutes for sequential resilience; fixture build/deploy/rollback
+have their own bounded operations. No deadline increase is needed for this task.
 
-## What is asserted
+## Fourteen design acceptance criteria
 
-- Exactly the four expected generated registrations in the four worker
-  namespaces, with the canonical full plan and hash. All four workers have zero
-  desired replicas **and zero real Pods**, with healthy Ready scalers.
-- A body-free POST starts the diamond. Temporal parent event IDs prove A
-  completion precedes B/C commands and both B/C completions precede D. B/C must
-  both be scheduled before either completes, not serialized by a global barrier.
-  Each child is initiated/started/completed once on its expected stable queue.
-- Parent input is precisely the immutable plan; child/activity commands and
-  results contain only worker identity. Complete JSON values are compared so
-  additional business-data fields cannot be ignored by permissive struct decode.
-  Child activity commands and successful results are inspected in child history.
-- Sorted identity-only parent results are returned by the real API. The same key
-  returns the original workflow/run/hash/status/result after completion,
-  orchestrator restart and a registry dependency change. Unexpected whitespace
-  body bytes produce 400 and direct Temporal lookup establishes no phantom run.
-- Workers return to zero real Pods after completion/replay. Cached Temporal
-  poller entries are observed, but are never treated as proof of running workers.
-- Snapshot isolation changes B's dependency from A to C while the first parent
-  is still active; the old execution retains its original input/hash and diamond
-  execution order, while a different key selects and executes the changed plan.
-- Recovery force-deletes the exact Pod identified by the running A activity's
-  worker identity/UID, observes successful attempt >=2 in history, restarts the
-  orchestrator during execution, and reuses the independent delayed-activity
-  retry proof against the combined deployment. The latter observes activity
-  backlog with zero real worker Pods, then native reactivation and retry >=2.
-- Connectivity recovery routes **only the orchestrator** through a test-only TCP
-  relay. Removing only the relay Pod closes established connections; a previously
-  healthy gRPC path then demonstrably fails. The API returns bounded 503, and the
-  direct healthy Temporal client proves the rejected key is NotFound both during
-  the outage and after recovery. The existing run and durable replay recover
-  without restarting that API process. This is **not** a total-server or
-  all-client outage experiment. Workers/KEDA keep their original direct endpoint.
+Names below are actual tests or named shell assertions, not proposed coverage.
+Current local result for each required command is in the execution section;
+historical Linux coverage is separate. Unit suites run via `mise run validate`.
 
-The relay uses the integration test binary itself and existing pinned Go/Debian
-base images, not a production binary or test switch. Its outage rollback is
-registered before disconnecting. The deliberate cut interval is asserted below
-thirty seconds; relay startup/reconnection and remaining workflow completion
-are separate from that cut interval.
+1. **Create cluster/infrastructure from documented commands.**
+   `internal/chart: TestUpRerunAndBootstrapOrdering`,
+   `TestInfrastructureAndBlockYAML`, `TestForeignKubeconfigFailsClosed` cover
+   ordering/isolation offline. Real `k8s:up` from absence and seeded-history
+   reapply passed locally. `test:kind-validation` proves ready native/custom
+   dry-run controls, field-type/unknown-kind rejection and non-persistence.
+   Historical Linux Kind also created/recreated the stack.
+2. **Four annotated Services generate four valid registrations.**
+   `tests/integration: TestDiscoveryPolicy` checks native generation/schema and
+   lifecycle; `TestDiamondFromZero` waits for exactly the four canonical
+   registrations/hash. `k8s/policies/tests: TestGeneration` checks CLI output.
+   Run `test:policies-integration` then `smoke`; both passed locally and in
+   historical bounded Linux Kind coverage.
+3. **Zero workers while orchestrator remains available.**
+   `TestInitialScalingConvergence`, `TestActivationFromZero`,
+   `TestDiamondFromZero` assert zero desired replicas **and zero real Pods**,
+   with healthy scalers and available API. Run `test:scaling` / `smoke`.
+4. **Zero-body API, malformed body 400, durable key-only replay.**
+   `services/orchestrator/api: TestStartRequestValidation`,
+   `TestStartBodyStreamsAndContentType`, `TestHTTPDurableRepeatAndRegistryChange`,
+   `TestHTTPConcurrentDuplicatesAndCompletedRetryAfterRestart`,
+   `TestHTTPAmbiguousStartAndUnavailableLookup`, and
+   `TestTemporalUnavailableRequestDeadline`; `runs:
+   TestAmbiguousStartIsUnavailableUntilDurableRetry` cover transport/contracts.
+   Named shell assertion `readiness, body-free diamond, ... completed keyed
+   replay, body400` runs in Compose/kind baseline; `TestDiamondFromZero`
+   verifies real replay after restart/registry change and no phantom body run.
+5. **A, concurrent B/C, then D after both.**
+   `services/orchestrator/workflows: TestParentScheduling` covers chains,
+   diamonds and immediate-ready scheduling. `TestDiamondFromZero` inspects
+   parent event IDs: both B/C commands precede either completion; D's command
+   follows both completions. Log arrival order alone is not accepted evidence.
+6. **Sorted identity-only result and command payloads.**
+   `internal/contracts: TestSerializedWorkflowEnvelopesContainOnlyExecutionMetadata`,
+   `services/worker/workflows: TestChildOptionsAndResult`, and
+   `TestDiamondFromZero` compare full decoded parent/child/activity input/result
+   values and stable queues from real histories. Extra fields cannot be silently
+   discarded by permissive decoding. `TestHistoryAssertionsSensitivity` proves
+   corrupt payload/queue/order/duplicate/missing-result witnesses are rejected.
+7. **Eventual return to zero.**
+   `TestActivationFromZero` and `TestDiamondFromZero` await zero replicas/real
+   Pods after completion with healthy scaler conditions. `TestScalerErrorsAreNotInactivity`
+   distinguishes unreachable endpoints from healthy empty queues. Poller-cache
+   entries are not proof of living workers. `test:scaling` / `smoke` passed.
+8. **Updates affect subsequent runs, not an active snapshot.**
+   `TestPlanSnapshotIsolation` changes B from depending on A to C during an
+   active run; full histories verify old/new input/hash/order. `internal/registry:
+   TestSnapshotDeepCopy` and `runs: TestRetryKeepsOriginalValidPlanAndNewKeyUsesChangedPlan`
+   cover immutable copies/key behavior offline. Run `test:resilience`: passed
+   locally; historical PR Linux resilience was skipped, not passed.
+9. **Invalid observed graph blocks starts before Temporal.**
+   `TestLiveRegistry` introduces a cycle through separate updates plus unknown/duplicate/malformed
+   state and checks diagnostic problems/503 plus direct no-execution lookup;
+   `runs: TestNewStartsRevalidateCopiedPlans`, `TestNoStartOnLookupFailure`, and
+   `internal/registry: TestKubernetesDecodeRejectsObservedInvalidState` provide
+   focused pre-start coverage. Run `test:registry`: passed locally/historical CI.
+10. **Removal/deletion leaves no usable stale registration.**
+    `TestDiscoveryPolicy` separately checks source delete, flag false, annotation
+    removal, re-enable/recreation and preexisting-source generation.
+    `TestLiveRegistry` checks downstream removal and namespace scope lifecycle.
+    Both live commands passed; readiness or synchronize=true alone is not proof.
+11. **Admission rejects malformed/self dependencies on CREATE and UPDATE.**
+    `k8s/policies/tests: TestAdmission` consumes the shared parser fixtures for
+    CREATE/UPDATE/DELETE; `TestDiscoveryPolicy/admission` exercises real source
+    Service requests, including padded self-reference and valid roots/multi-lists.
+    Disable/removal and deletion remain possible. `validate` and
+    `test:policies-integration` passed; admission is not retroactive repair.
+12. **Complete intended and observed arbitrary graph validation.**
+    `internal/plan: TestBuild`, `internal/manifest: TestInvalidFixtures`, and
+    `cmd/validate-graph: TestCLI` cover unknown dependencies, self and longer
+    cycles through the real CLI/full deployment set. `TestLiveRegistry` protects
+    observed state outside that path. Run `test:manifests`,
+    `validate:manifests`, `test:registry`. No CRD schema discovery is claimed offline.
+13. **Separate namespaces, dynamic scope/RBAC, denied unauthorized access.**
+    `internal/chart: TestStaticRender`, `TestDiscoveryRender` cover namespace and
+    reader manifests. `TestLiveRegistry` exercises namespace add/remove and
+    RoleBinding revocation/recovery without process restart; `TestRegistryRBAC`
+    uses actual service-account impersonation across scope/verb allow/deny cases.
+    Reader has Namespace and per-namespace ConfigMap reads only, no Secret/Service
+    reads or writes. Both live commands passed locally/historical Linux CI.
+14. **Persistence on replacement; destructive reset behaves as documented.**
+    Named `compose:persistence` assertions cover Temporal/PG restart and container
+    replacement, schema rerun, down/up, isolated reset old-history 404 and new
+    execution. `test:kind-persistence` proves different Pod UIDs, unchanged PVC
+    UID/binding and immutable Secret UID/version, schemas 1.19/1.14, exact
+    completed run/hash/result and replay. Current local authorized down/down/up
+    proved old witness 404; new seeded witness survived reapply and later tests.
+    Historical Linux Kind also proved explicit reset 404. Reset loss is **not**
+    preservation and raw histories are not an external database backup.
 
-## Retained local observations — 2026-11-10
+## Current Task11 local execution — 2026-11-11 UTC
 
-Provenance: Darwin arm64 host, Docker Desktop's Linux arm64 daemon, existing
-retained kind cluster. These are local retained-cluster measurements, **not**
-fresh-cluster or hosted Linux results. App image tags identify base
-`233c8697f5eef844ae17a8bddf914e2af4d64e14` plus unique dirty-worktree suffixes;
-they do not claim clean exact-head CI verification.
+Source/config: approved merged base `2ba4340facf6f0536bda64c7d0d35ffff7eda2e4`
+plus Task11 **documentation-only** edits. No runtime, test, task, workflow, pin or
+build changes. Documentation edits after these runs do not change executed
+source/config. Darwin arm64 host; Docker 29.5.3 Linux arm64; Compose 5.1.4;
+Go 1.27.3, kind 0.33.0, Helm 4.3.1, kubectl 1.35.8, Kyverno CLI 1.19.2.
+Exact command/start/end/exit/whole-second elapsed files are ignored under
+`.local/task11/<phase>.{command,start,end,exit,seconds,log}`. Durations are observed
+on this cached-image/tool host, not clean-download performance guarantees.
 
-Observed clients: Go 1.27.3, kind 0.33.0, Helm 4.3.1, kubectl 1.35.8,
-Kyverno CLI 1.19.2 (`e63308f1`), Docker client/server 29.5.3. Repository pins
-remain Kubernetes 1.35.8, KEDA chart 2.21.0, Kyverno chart 3.9.2,
-Temporal server/admin-tools 1.32.0, Temporal SDK 1.50.0/API 1.63.5 and
-PostgreSQL 16.15. `versions.log` and existing manifests retain exact provenance
-and image/chart digests; no version pin was changed for these experiments.
+All required public commands below exited **0**:
 
-Successful `mise run smoke` invocations:
+- `mise run validate`: **112s**, full race/vet, dedicated offline sensitivity,
+  shell syntax, real pinned Kyverno CLI, Helm/full graph and Compose config.
+  `mise run validate:manifests`: **1s**, explicitly run as its public entrypoint.
+- `mise run images:build`: **3s**; `mise run compose:up`: **21s** including its
+  cached rebuild, actual clean project/bootstrap and readiness. Unique project
+  `temporal-demo-task11-docs-final-acceptance`, separate owner-only env file;
+  all published host ports verified 127.0.0.1, UI GET succeeded.
+- `mise run compose:smoke`: **22s**. `mise run compose:persistence`: **122s**,
+  including schema versions, isolated reset 404 and fresh run. `compose:down`:
+  **2s**, retained its volume; explicit task-project reset: **0s**, removed it.
+  Ordinary retained temporal-demo Compose data/credentials were never touched.
+- Authorized `mise run k8s:down`: **1s**; second down **0s** (absent).
+  `mise run k8s:up`: **120s**, actual fresh cluster creation/readiness with cached
+  tools/images. Pre-reset zero-running-execution, UID/Docker ownership and raw
+  history/result capture gates passed. Old completed witness returned **404**.
+- First fresh `mise run test:kind-baseline`: **19s**, seeds a completed witness
+  **before** reapply. Second `mise run k8s:up`: **23s**; explicit API comparison
+  of that seeded exact workflow/run/hash/result passed afterward.
+  `mise run validate:k8s`: **1s**; `mise run test:kind-validation`: **2s**, all
+  positive controls then intended negative rejections, no persisted fixtures.
+  `mise run test:kind-persistence`: **31s** including safe schema rerun.
+- `mise run policies:install`: **1s**; `mise run test:policies-integration`:
+  **96s** (TestDiscoveryPolicy **93.13s**), with native lifecycle/preservation.
+- `mise run apps:deploy-scaling`: **6s**;
+  `SCALING_SKIP_LONG=0 mise run test:scaling`: **816s** including native rollback
+  and baseline. Tests passed: initial convergence, error conditions, activation,
+  replica handoff, **in-flight scale-down**, delayed retry and optional count.
+  Singleton/diamond activation observations **5.328s/1.102s**; these are sampled
+  scaling observations, not Pod-Ready startup promises. Long interruption reached
+  attempt 2 after heartbeat timeout. Delayed retry observed activity backlog 1,
+  workflow backlog 0 with zero real Pods; attempt 2 succeeded after reactivation.
+- `mise run apps:deploy-discovery`: **13s**; `mise run test:registry`: **51s**;
+  `mise run test:rbac`: **11s**; explicit native discovery restore: **5s**.
+- `mise run smoke`: **171s** total, TestDiamondFromZero **149.00s**; proof
+  `.local/task10-smoke-zlXSjfo0`. POST-to-desired-A-replica observation **4.370s**;
+  all-worker-zero wait after completion/replay checks **118.873s**. That wait
+  starts after other assertions and checks workers sequentially; it is not four
+  independent cooldown measurements or first-task/Pod readiness latency.
+- `mise run test:resilience`: **642s** total (Go package **595.565s**); proof
+  `.local/task10-resilience-vW3jdZ87`. All five cases passed: snapshot **31.95s**,
+  worker termination **187.24s**, orchestrator restart **96.44s**, delayed retry
+  **220.45s**, orchestrator-only connectivity **58.91s**. Forced activity Pod UID
+  selection and actual successful attempt 2 were observed. Connectivity cut is
+  asserted <30s; **46.337s** is cut-start through healthy workflow completion,
+  not outage duration. Bounded 503/direct NotFound before/after recovery passed.
 
-- `.local/task10/smoke-3.log`, exit 0; proof
-  `.local/task10-smoke-piyzXOFL`. Diamond test 146.18 s; observed POST-to-desired-A
-  replica=1 latency 4.295 s; combined wait for all workers to be zero after the
-  completion/replay checks 111.716 s. This is a desired-replica observation, not
-  a measured Pod-Ready or first-task-start latency.
-- `.local/task10/smoke-4.log`, exit 0; proof
-  `.local/task10-smoke-yriTbAtI`. Diamond test 156.81 s; same activation observation
-  4.302 s; all-worker zero wait 117.163 s. Initial zero-real-Pod checks coexisted
-  with cached Temporal workflow/activity poller counts A=3/3, B=2/2, C=2/2,
-  D=2/2: poller-cache entries are demonstrably not living Pods.
+Resilience fault injection routes only the orchestrator through a test-only TCP
+relay. Workers/KEDA keep direct connectivity. It is **not a server-wide outage**.
+Accelerated scale-down/delayed-retry fixtures use short cooldowns and longer retry
+delays to expose interruption; production retry/grace/scaler settings stay unchanged.
+Running-count visibility is approximate and cannot certify in-flight safety.
 
-The zero waits start after API restart/replay/dependency checks, not exactly at
-activity completion; per-worker probes run sequentially. These values must not
-be interpreted as four independent cooldown measurements. Native configured
-polling/cooldown remain 5 s/120 s.
+### Failures retained and resolved at their actual scope
 
-Successful `mise run test:resilience`: `.local/task10/resilience-3.log`, exit 0;
-proof `.local/task10-resilience-EJqkifCl`; Go package elapsed 441.947 s:
+No product behavior failure or code repair occurred. Two new ignored evidence
+helper mistakes were preserved rather than relabeling the whole sequence green:
 
-- Snapshot isolation: 26.32 s, both old/new plans validated through real histories.
-- Worker termination: 164.97 s including initial zero wait and restoration;
-  forced exact Pod UID `62d43fce-e7e1-46c3-89c6-d4a56c38fef6`; completed activity
-  attempt 2.
-- Orchestrator restart: 47.86 s including restoration; durable identity/result and
-  real history checks passed.
-- Delayed retry: 137.39 s; heartbeat failure, delayed attempt 2, observed activity
-  backlog 1/workflow backlog 0 with zero real Pods. Desired replica=1 sampled
-  39 ms after unpause completed; that is not an end-to-end cold-start measurement.
-  Final observed worker zero wait 15.246 s under the experiment's short cooldown.
-- Scoped connectivity: 64.73 s including setup/restoration; actual failed gRPC,
-  503 within the asserted transport bound, NotFound before/after recovery, and
-  completed original run/replay. The raw log's `observed outage=52.845s` label was
-  misleading: its timer ran from cut start through **healthy workflow completion**,
-  not just the disconnected interval. Code now labels that quantity accurately;
-  no precise disconnected-duration estimate is claimed from that run.
+- `compose-sequence` exit **1**, after public build/up passed: the author's
+  loopback assertion included **unpublished** exposed ports (`PublishedPort=0`,
+  empty URL). Raw `compose-ports.json` established all actual published ports
+  were loopback. Corrected the local assertion to filter published ports and
+  resumed the existing project **before smoke**, without repeating up/build.
+  `compose-resume` exit **0** includes smoke, persistence and owned cleanup.
+- `pre-reset` exit **1**, read-only capture helper used child IDs containing `/`
+  as flat filenames. Parent history had been captured; no reset occurred.
+  Escaped slashes, rechecked zero-running/identity and captured available full
+  parent/child histories/result; `pre-reset-capture-fixed` exit **0**. No
+  production/test behavior change, test weakening or deadline increase.
 
-Baseline and changed canonical hashes were respectively
-`5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62` and
-`88ce5ea75d2a5a0a600ea3f636a6a9c70171b2fe9a2932aade940e9c42bf6bc8`.
+### Reset and preservation provenance
 
-## Failures retained, not erased
+Original trusted cluster UID `d3a21c85-e0a9-431e-ac0b-6fe597facfeb` and its PVC/
+Secret/history were deliberately destroyed under the existing named-reset
+permission, after safety gates. Pre-reset full available proof is under
+`.local/task11/pre-reset/`, not a backup of PostgreSQL.
 
-- Test-first diamond failed on static registry mode before combined deployment
-  (`diamond-red.log`, exit 1). This was the expected missing-wiring RED.
-- First public smoke failed **before mutation**: kubectl emits a stream of JSON
-  objects, not a List; Bash 3 also rejects an empty array under nounset.
-  Native-pipeline and empty-cleanup regressions reproduced both, then passed.
-- Second smoke's diamond passed in 152.84 s, but the public command failed
-  restoration. Removing the newly created ServiceAccount too early prevented the
-  baseline template from creating a replacement Pod. Exact UID-scoped temporary
-  ServiceAccount repair restored Ready baseline; subsequent cleanup retains
-  access until restored Pods are Ready. The comparison also incorrectly treated
-  the Deployment controller's revision counter as restorable configuration.
-  The counter is now the only annotation excluded; exact app specs/UIDs/labels,
-  rollout annotations and last-applied ownership bytes are still compared.
-- First resilience invocation failed before mutation because the root Docker
-  allowlist excluded test sources. A fixture-specific Docker ignore file fixes
-  that without expanding production build contexts.
-- Second resilience ran all cases but failed worker termination's single-Pod
-  assumption during rolling replacement, and connectivity returned no bounded
-  HTTP response. Selection now uses the running activity's actual worker
-  identity/Pod UID; tests wait for old real Pods to be gone before configuring
-  the next activity. The API defect was genuine: start/status SDK calls had no
-  server deadline (only readiness did). New deadline regressions failed first;
-  start/status now have a two-second operation budget and return 503 on Temporal
-  unavailability. No workflow, retry, shutdown, scaler or readiness timeout was
-  increased. Subsequent full resilience passed.
+New verified cluster UID `5c66796f-1c23-4731-b4aa-eb06aee50b2a`; PVC UID
+`dd199727-58a2-420c-9dd5-8bea72f39892`; immutable Secret UID
+`6c37df44-c9d6-4740-8815-55351e976be0`, resourceVersion **508**. Only task-local
+trusted UID was updated after confirming actual new node ownership. The fresh
+seed witness is `run-0b24519c8266f6a0cda5f72a042baefd0e3c66a66239193ca7cde02e71f883e0`
+/ `01a1ca7a-aa72-7d7e-8871-86b6f81b1f19`. Ordinary tests preserve the **new**
+cluster; no claim is made that original history survived reset. Final health
+checks passed: original fresh seed result still byte-identical, new PVC/Secret
+identity unchanged, five Ready fixed/static apps, policies Ready and four
+registrations, zero running executions and no owned scalers/HPA/discovery
+RBAC/relay/Compose project or volume. Pending start intents in both combined
+ledgers all have durable run-ID pins. Unrelated running container names, labels
+and ports match preflight. Public `api:forward` and `ui:forward` each returned
+localhost HTTP 200, then their exact owned process groups were terminated/reaped
+and their ports verified closed. Raw proof: `final-health.*`,
+`public-forwards.*`, `ledger-inspection.log`; final process inventory had no
+remaining kubectl tunnel/integration-test processes.
 
-Raw commands/exits and focused RED/GREEN/sensitivity evidence live in
-`.local/task10/`; detailed case histories and cleanup logs remain in each printed
-proof directory. Synthetic corruptions reject extra payload fields, wrong queues,
-invalid dependency ordering, duplicate children and missing results. No fake
-failure knob or private production-state injection was used.
+## Cumulative selector/CI audit
 
-## Preservation and outstanding verification
+`mise run validate` keeps all untagged packages under race detection/vet and
+explicitly runs offline `HistoryAssertionsSensitivity`, `ActivityPodSelection`,
+`WorkerRestoreKeepsNativeReplicas`, `SnapshotCleanupFailurePaths` and
+`StartIntentOwnership` under `integration,resilience_integration`. It also checks
+all scripts' Bash syntax, real policy CLI tests, chart/graph and Compose config.
 
-Ordinary runs preserve their own pre-test baseline; that guarantee does not
-extend across an explicitly authorized destructive cluster reset. The original
-cluster's preservation observations below are **historical pre-reset proof**.
+Live selections remain distinct and uncached (`-count=1`):
 
-Successful runs restore the original five application specs and last-applied
-metadata, exact source Service identity/spec/annotations, bound PVC,
-immutable Secret UID/resourceVersion, policy identities/specs, Temporal server
-Pod identity, and completed history hash. Only recorded owned executions can be
-terminated. Created RBAC/scalers/relay objects are deleted only after matching
-their recorded UIDs. The controller-owned Deployment revision counter naturally
-advances; it is not reset. Failure evidence and snapshots are retained.
+- `policies_integration` + `^TestDiscoveryPolicy$` (20-minute process budget).
+- `test:scaling`: `integration` without policy/registry/combined tags, default
+  all selected tests, 25-minute budget. `SCALING_SKIP_LONG=1` skips **only**
+  TestInFlightScaleDown in PR CI; local required acceptance used 0.
+- `registry_integration`: exact TestLiveRegistry / TestRegistryRBAC selectors,
+  20-minute budget each; discovery restore trap remains active.
+- `acceptance_integration`: exact TestDiamondFromZero, 10-minute budget.
+- `resilience_integration`: `^Test(PlanSnapshotIsolation|Recovery)`, 30-minute
+  budget; selects all five live cases, not the relay-server fixture itself.
+- Dedicated integration-tag offline sensitivity tests run in cumulative validate;
+  ordinary `go test ./...` alone is not live acceptance. Selector/cleanup/shell
+  guard tests remain active; no previous phase, test or image-build boundary was
+  removed. No task/workflow repair was needed by the audit.
 
-The original pre-experiment witness
-`run-5669836d56f2695ce29d0eb4c67ff471e236e700ce2d9d3a7e9acb96bf394d64` /
-`01a1c348-8058-7a5a-808f-b5f4e8c5db57` retained SHA256
-`2bef29cb6361ea06ab4c84a5e5479fa793211c96b85f0d9e4b666adcb39db87d`
-after the recovery suite (`original-witness-after.log`, exit 0).
+Historical exact-head Task10 Linux attempt 1 succeeded for Validate, Compose and
+bounded Kind; raw logs/step JSON were inspected, including intentional long-case
+skips. Full action pins/permissions/timeouts/artifact ownership and run links are
+in [versions](versions.md). **Current Task11-head Linux CI, independent reviews
+and manual hosted resilience remain pending controller gates**, not inferred
+from earlier green PR jobs or current local ARM64 results.
 
-Fresh-local recreation was initially blocked by the no-reset safety boundary.
-The user subsequently explicitly authorized deleting `temporal-demo` for testing,
-as recorded in `task-10-recreation-authorization.md` in the task workspace.
-That authorization superseded only the cluster-preservation restriction for one
-deliberate local reset. No separate VM was required or provisioned. The fresh-local
-acceptance below resolves that verification gap; earlier retained-cluster runs
-are not being relabeled as fresh evidence.
+## Known limits and failure handling
 
-Automatic PR CI retains all earlier phases and adds the same public smoke before
-and after its existing **disposable hosted runner** recreation. Manual dispatch
-also runs the same public resilience task. Secret-free combined proof directories
-are uploaded even on failure; kubeconfig/credential files are not included.
-Actual exact-head hosted CI has not been run by this implementer and cannot be
-claimed as evidence. Fresh-local results below are distinct from the earlier
-retained-local results and from prospective hosted Linux proof. Independent task
-and whole-branch reviews, controller verification and actual exact-head cumulative
-Linux CI remain pending. No Task10-complete, Task11 or PR-ready claim is made.
-
-Final offline `mise run validate` passed (exit 0; `.local/task10/validate-final.log`
-and `.exit`), including full race tests/vet, dedicated acceptance sensitivity,
-Bash syntax, pinned policy tests, chart/graph checks and credential-free Compose
-configuration. Final read-only original-snapshot/history and absence-of-owned-
-resources checks also passed (`.local/task10/preservation-final.log`, exit 0).
-Those checks preceded the later authorized reset; validation/resilience were not
-rerun merely because the environment was recreated.
-
-## User-authorized fresh-local acceptance — 2026-11-10
-
-Only the previously missing fresh-local acceptance was executed, on the same
-Darwin arm64 host and Docker Desktop Linux arm64 daemon. No kind identity-boundary
-change, VM installation, Docker-context switch, broad Docker cleanup or Compose
-reset occurred. No application/test/config code changes were needed.
-
-Before deletion, the worktree-local mode-600 kubeconfig/context, original
-kube-system UID `91d1ae13-a854-471e-a044-040a669f28ef` and exact control-plane
-Docker kind label `temporal-demo` were reverified. There were no active experiment
-processes/tunnels, native scalers/HPAs or relay, and no running Temporal executions.
-The original completed witness still had its recorded hash. Its full available
-parent/child histories, app/Service/PVC/policy identities and credential identity
-only (not values) were captured to `.local/task10/recreation/pre-reset/`.
-Read-only pre-reset checks and history capture exited 0.
-
-Actual commands, all through the existing pinned tasks, all exit 0:
-
-- `mise run k8s:down`: 2 s, deleted only the explicitly authorized named cluster.
-- `mise run k8s:up`: 182 s, genuinely created a new cluster/PVC and provisioned the
-  pinned stack. Initial app images used clean committed source
-  `d926577695e404ff750d25b8541e49f31c04532f` (no implementation changes).
-- `mise run policies:install`: 2 s, required policies on the fresh stack.
-- `mise run test:kind-baseline`: 21 s, created the new completed-history witness
-  required by smoke's safety preflight, using the same fresh-run prerequisite as
-  CI. This is fresh fixture initialization, not a repeat of retained resilience
-  or full validation.
-- `mise run smoke`: 171 s including fixture deployment and successful rollback;
-  actual diamond test 142.16 s (Go package 142.697 s).
-
-Command elapsed values are whole-second shell observations, not subsecond
-benchmarks. Raw logs, exits and elapsed files are under
-`.local/task10/recreation/{down,up,policies,seed-baseline,smoke-fresh}.*`.
-
-New identities:
-
-- kube-system UID `d3a21c85-e0a9-431e-ac0b-6fe597facfeb`;
-- bound PostgreSQL PVC UID `4c8de2e2-9a4f-4cd6-a474-41a2e87489b6`, volume
-  `pvc-4c8de2e2-9a4f-4cd6-a474-41a2e87489b6`;
-- new immutable Secret UID `150b327e-3ce2-456d-8b1e-ad3583ca8615`, resourceVersion
-  `460`. Its identity was unchanged across the ordinary fresh smoke.
-
-The old witness returned HTTP **404** on the new healthy API before seeding new
-history (`fresh-boundary.log`, exit 0; `old-history-http-status` and
-`old-history-response.json`). **Loss of the old cluster's histories/PVC was
-expected and explicitly authorized.** Do not claim their old identities or
-history survived this reset. Old raw proof remains on the host, not in Temporal.
-The new verified UID was selected only after confirming the newly created owned
-cluster; the worktree-local task environment was updated, not global kubeconfig.
-
-Fresh combined smoke proof: `.local/task10-smoke-Gkmtgsul`, with actual histories,
-created UID ledger, exact fresh-baseline before/after comparisons and restore log.
-It passed exact registration/hash checks, zero actual Pods, full diamond command/
-payload/queue/order/result assertions, body400/no phantom run, durable replay
-across completion/restart/registry change and eventual zero. Desired-A-replica
-activation was sampled at 1.104 s; combined all-worker zero wait after replay
-checks was 111.602 s. These have the same limited measurement definitions as
-above, not Pod-Ready latency or independent worker cooldowns. Cached workflow and
-activity poller counts were 1/1 for each worker while actual Pods were zero.
-
-The fresh seed witness
-`run-405e7ae4861bd2fe761d1b1e18638c771fb3e4d40ef2c85c27b19114f949e157` /
-`01a1c78d-b7a9-7f0a-862d-fcfd46fa6c17` retained hash
-`f22fa961095286cfac3f3787b6155c7c6dfef015b882dbc7e9e5199c8b4c0fd0`
-across this ordinary smoke. That is a **new-cluster** preservation claim only.
-
-Final read-only health/process checks exited 0 (`final-health.*`,
-`final-process-check.*`): recreated Temporal/PostgreSQL and all five fixed
-application Deployments healthy, both policies Ready, new PVC/Secret preserved
-across smoke, no test-owned scaler/HPA/discovery RBAC/relay or tunnels/processes
-remaining. Smoke cleanup also established no running executions and unchanged
-fresh witness hash. The cluster is left running in its restored fixed-replica,
-static-registry baseline, with four generated registrations and policies ready
-for future explicit combined tests. The fresh Pod inventory records one early
-KEDA operator restart; it is currently Ready, and neither provisioning nor smoke
-failed. No further teardown was performed.
-
-## Review fix round 1 — 2026-11-11
-
-Independent review found failure paths not covered by the earlier happy-path
-runs. Per-experiment worker Deployment rollback now restores the Pod template
-and intended metadata with a UID guard, without replacing `/spec` or writing
-KEDA/HPA-owned replicas. Final fixed-replica shell baseline restoration remains
-after scaler removal. Snapshot-isolation rollback uses independent cleanup
-callbacks: restoring the scaler cannot be skipped by a fatal Service/registry
-assertion, and an expired experiment context is not reused for registry cleanup.
-Both callback failures remain visible. ClusterRole/ClusterRoleBinding cleanup
-now uses cluster-scoped arguments; namespaced resources keep their namespace,
-and diagnostic stderr is not suppressed. Pinned policy deprecation is unchanged.
-
-Focused regressions each failed first, then passed: application of the actual
-worker cleanup JSON patch to a Deployment whose native replicas advanced from
-0 to 1; real `testing.T` cleanup/FailNow subprocesses with Service, scaler,
-both-action and registry verification failures plus an expired experiment
-context; and shell cleanup scope/diagnostic propagation. These offline checks
-are included in validation's dedicated build-tag selection; raw RED/GREEN and
-focused race-test output is under `.local/task10/fix-1/`.
-
-Affected public commands were each run once against the unchanged recreated
-cluster, without another reset: smoke exit 0 (216 s including fixture work,
-diamond 145.89 s) and resilience exit 0 (627 s including fixture work,
-five-case Go package 582.709 s). The additional native zero waits in recovery
-remain within existing budgets; no timeout or assertion was relaxed. Proof
-folders are `.local/task10-smoke-rFcrgPfS` and
-`.local/task10-resilience-rcpA2y3S`. All original app/Service ownership metadata,
-new-cluster PVC/Secret/policy identities and completed witness were preserved
-across these ordinary tests. Final checks found Ready fixed apps, no test-owned
-scaler/HPA/discovery RBAC/relay or worktree-owned tunnels, and zero running
-executions. Scope warnings were absent in both restore logs; policy warnings
-remain visible.
-
-No repeated full validation was run for this fix round. The controller's
-separate external 240-second validation interruption has no established final
-exit and is neither a product failure nor a passing run. Prior author validation
-is historical evidence, not validation of the new failure paths. Controller
-re-review and exact-head cumulative Linux CI remain separate pending gates.
-
-## Final review fix — ambiguous start ownership
-
-Whole-branch review identified a separate failed-start ownership gap: HTTP 503
-or a lost response can follow Temporal acceptance. The existing API ambiguity
-and same-key recovery contract remain unchanged. Acceptance starts now durably
-write their exact key-derived workflow-ID intent before POST, register cleanup
-before response assertions, and pin a validated successful response. Failed
-responses remain failed tests. Fresh bounded direct Temporal reconciliation
-resolves a pending intent to an exact run ID before existing parent/history-owned
-child cleanup or diagnostics. NotFound retains the pending intent; unavailable
-is an error, never proof of absence. The existing shell fallback reads the same
-ledger, prefers persisted pins over old pending rows, and never terminates with
-an empty run ID. Partial JSONL rows remain reported failures without suppressing
-cleanup of other durable records. No production code, API contract, pins,
-workflow input, replica ownership or lifecycle timing changed.
-
-Offline regressions exercise the real start assertions, cleanup callbacks,
-ledger reader, reconciliation and history collection with external HTTP/SDK
-boundary doubles. Genuine RED showed unpersisted accepted-503/lost-response
-ownership, POST despite failed intent persistence, and rejection of pending-only
-fallback rows; a separate diagnostic RED showed missing recovered-run evidence.
-GREEN covers 18 cases including process death before response, NotFound then
-later visibility, unavailable lookup, invalid identities, failed termination,
-legacy pins, partial rows and read-only parent/child diagnostics. The regression
-also observes the actual ledger at SDK cleanup/history boundaries to require a
-durable pin before use. All new cases join the existing uncached selection.
-
-Final author `mise run validate` passed once (105 s). Public smoke passed once
-(202 s including fixture work, diamond 151.78 s), with proof under
-`.local/task10-smoke-ZwXN9JGT`. Additional targeted SDK checks used pending-only
-copies of that now-completed, test-owned execution's intent: actual shell-fallback
-selection and diagnostics resolved exactly its recorded run ID and retained
-parent plus four child histories without starting new work. This verifies the
-two changed readers against real Temporal; the full live resilience suite was
-not repeated because production recovery behavior is unchanged and both build
-tag variants exercise the shared ownership regressions offline.
-
-Raw proof is `.local/task10/final-fix/`. Exact application/Service restoration,
-new-cluster witness/PVC/Secret/policy preservation, zero running executions,
-Ready fixed/static baseline and absence of test resources/tunnels were verified.
-The retained recreated-cluster UID is unchanged; no reset occurred. Scoped final
-re-review, controller verification and actual exact-head Linux CI remain pending;
-this is not a Task10-complete or PR-ready claim.
+- Discovery is eventual; wait for intended names/hash. Registration is trusted
+  derived state, not cryptographically authenticated provenance or worker capacity.
+- Backlog/cooldown/optional running count cannot guarantee no scale-down interruption.
+  Retry-safe activities, cooperative cancellation and bounded shutdown mitigate it.
+  Do not remove workers or make incompatible upgrades during active runs.
+- Pinned Kyverno ClusterPolicy deprecation remains visible. Helm's icon suggestion
+  and secondary invalid-object diagnostics on intentional API negatives are not
+  hidden. Earlier scaling log-stream strictness remains an environmental sensitivity;
+  current full scaling passed without loosening assertions.
+- Single-node local storage, no production auth/HA/external backup. Explicit
+  reset loses history and deduplication. Clean startup timings above use local
+  cached inputs, not a network-independent SLA.
+- On failure keep logs/PIDs/ownership ledgers; run only native exact-owned cleanup.
+  Failed restoration or unavailable ownership lookup is a failure, never evidence
+  of absence. Do not broaden cleanup, silently skip a phase or blindly rerun.
