@@ -23,6 +23,8 @@ while true; do
   code=$(curl -sS --max-time "$timeout" -o "$work/response" -w '%{http_code}' "$api/graph" 2>"$work/error") || code=000
   if [[ $code == 200 ]] && jq -e --slurpfile expected "$expected" \
     '.synced == true and .valid == true and .problems == [] and (.plan.nodes | sort_by(.name)) == ($expected[0] | sort_by(.name))' "$work/response" >/dev/null 2>&1; then
+    # A response (or validation) delayed beyond the deadline is not readiness.
+    (($(date +%s) <= deadline)) || break
     echo 'Complete worker graph discovered'
     exit 0
   fi

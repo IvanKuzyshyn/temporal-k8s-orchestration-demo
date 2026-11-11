@@ -1,5 +1,8 @@
 # Temporal Kubernetes Orchestration Implementation Plan
 
+> Historical plan. Superseded by the minimal-demo design and current root README.
+> Old staged commands and runtime modes below are not supported entrypoints.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver a reproducible local diamond-workflow demo with Temporal, independently scaled Go workers, KEDA, and Kyverno-driven registration.

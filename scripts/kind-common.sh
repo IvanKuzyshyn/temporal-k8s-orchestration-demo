@@ -19,7 +19,7 @@ k() {
 
 assert_context() {
   [[ -f $KUBECONFIG && $(kubectl --kubeconfig "$KUBECONFIG" config current-context) == "$CONTEXT" ]] || {
-    echo 'Wrong or missing local kind context; expected kind-temporal-demo (run k8s:up)' >&2
+    echo 'Wrong or missing local kind context; expected kind-temporal-demo (run mise run up)' >&2
     return 1
   }
 }

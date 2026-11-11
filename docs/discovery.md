@@ -1,154 +1,65 @@
-# Worker registration policies
+# Live discovery
 
-Policy installation generates registrations but does not switch the orchestrator
-from static mode. Explicit live discovery uses the namespace-scoped reader below;
-combined discovery/scaling is a separate temporary [acceptance path](experiments.md).
+Live Kubernetes registration is unconditional. There is no static file registry,
+Compose discovery mode, staged discovery command or `/workers` endpoint.
 
-## Run
+## Source contract
 
-```sh
-mise install kyverno
-mise run policies:test                 # real pinned CLI, no cluster
-mise run policies:install              # already-ready, owned kind-temporal-demo
-mise run test:policies-integration     # temporary namespaces; restores policies
-```
+The worker chart renders one Namespace and annotated Service per worker. Namespaces
+have `temporal-demo.io/worker-namespace: "true"`. Selected Services declare:
 
-Use the worktree's `.local/kubeconfig`, never a global context. Installation
-refuses foreign resources occupying the three owned policy/RBAC names. The live
-test temporarily removes **only** these two owned ClusterPolicies to prove
-installation after a source exists, then restores their checked-in definitions,
-even after assertion failures. Use the dedicated demo exclusively during this
-test. Do not edit its policies concurrently. A completed baseline workflow must
-already exist (`mise run test:kind-baseline` on a new stack); the test hashes its
-complete history before/after and preserves app Service UIDs, PVC identity,
-immutable Secret metadata, and static registry mode. It never resets storage or
-restarts app workloads. Automatic kind CI runs baseline/persistence first, then
-these policies and lifecycle checks, retaining scaling and reset coverage.
+- `temporal-worker: "true"`
+- `temporal-worker-run-after`: comma-separated worker names; roots use an empty value.
 
-## Admission contract
+The policy derives task queue `<worker-name>.v1.temporal` and fixes workflow type
+`ExampleChildWorkflow`; these are not separate Service annotations.
 
-Only Services in namespaces labeled
-`temporal-demo.io/worker-namespace: "true"` are selected. On CREATE/UPDATE,
-`temporal-worker`, when present, must be the string `"true"` or `"false"`.
-Missing/false allows deregistration regardless of stale dependency text. DELETE
-is never validated, including deletion of preexisting invalid Services.
+The pinned Kyverno policy validates registration fields, then generates a
+same-namespace `temporal-worker-<service>` ConfigMap containing workerName,
+taskQueue, workflowType, runAfter, sourceServiceName, sourceServiceUID,
+sourceServiceNamespace and schemaVersion. ConfigMaps have
+`temporal-demo.io/registration: "true"`.
+Generation synchronizes source changes and generated resources carry ownership
+metadata. Do not manually edit generated registrations.
 
-For true registrations, `temporal-worker-run-after` is an optional comma-separated
-list. Missing or wholly blank means a root. Individual names are trimmed with
-Go's Unicode White_Space set, then checked against the RFC 1035 Service-name
-syntax and length, including rejection of empty entries and trimmed self-reference.
-Duplicates are allowed; the shared Go parser deduplicates/sorts them. Unknown
-dependencies and cycles are deliberately admitted: only `plan.Build` has the
-complete graph. Parser fixtures live in `internal/plan/testdata/dependencies.json`
-and are consumed by both Go parser tests and actual CLI/API tests.
+Kyverno does not generate Deployments or ScaledObjects; Helm creates those. Worker
+Pods disable service-account token automount. Orchestrator RBAC lists/watches
+Namespaces cluster-wide and gets/lists/watches ConfigMaps only in worker namespaces.
+It cannot read Secrets or register workers by writing Kubernetes resources.
 
-## Generated data
+## Snapshot safety
 
-Each selected true Service generates a same-namespace ConfigMap named
-`temporal-worker-<service-name>` with label
-`temporal-demo.io/registration: "true"`. All data values are strings:
+The provider follows selected Namespace membership and per-namespace ConfigMap
+informer views. It does not expose a new graph as synchronized until the relevant
+views are synchronized. Reconnect/relist, permission failures and in-flight list
+attempts invalidate synchronization rather than reusing a stale-ready flag.
+Snapshots own their data; callers cannot mutate shared registration state.
 
-```yaml
-data:
-  schemaVersion: "1"
-  workerName: worker-a
-  taskQueue: worker-a.v1.temporal
-  workflowType: ExampleChildWorkflow
-  runAfter: ""
-  sourceServiceName: worker-a
-  sourceServiceNamespace: temporal-demo-worker-a
-  sourceServiceUID: <actual Service UID>
-```
+`registry.ValidateSnapshot` is shared by the read-only graph endpoint and new-run
+admission. It rejects unsynchronized/empty/invalid graphs and checks copied nodes
+against their rebuilt canonical graph. Validation problems block new runs, not
+health diagnostics or replay of an existing durable key.
 
-The dependency annotation is preserved verbatim; normalization remains the Go
-parser's job. No business fields are emitted. Namespace separation avoids
-ConfigMap collisions, not worker-identity collisions: identical Service names in
-two namespaces produce two ConfigMaps, and their combined registrations MUST
-fail `plan.Build` as duplicate identities.
+## Complete startup readiness
 
-## Verified lifecycle and permissions
+Bootstrap projects intended registrations from the actual rendered Namespaces and
+Services into sorted expected nodes, normalizing dependency whitespace/duplicates
+consistently with Go graph validation. It atomically writes
+`.local/lifecycle/expected-workers.json` before marking installation initialized.
+That generated state is retained during down/up; missing/malformed state fails
+closed. There is no separately maintained expected-graph JSON in source control.
 
-The pinned chart is 3.9.2, controllers and CLI are 1.19.2. Actual local controller
-checks prove generation on create, synchronized dependency update, cleanup on
-source delete, false flag and annotation removal, re-enable, recreation with a
-new UID, and `generateExisting` reconciliation after policy installation.
-Background reports identify preexisting violations. Pods, Deployments,
-unregistered Services and unselected namespaces do not generate registrations.
-Tests use bounded convergence plus stable absence checks and positive generation
-controls. No supplementary cleanup policy or source-validation fallback is used.
+After controllers, policy, schema, app and API readiness, `up` polls `/graph`
+immediately and then at one-second intervals for up to 120 elapsed seconds. It
+requires a synchronized valid graph and exact expected node identities, queues,
+workflow types and dependencies. Requests are sequential and capped at the lesser
+of two seconds or the remaining budget. Sleeps are capped too. Timeout prints
+last HTTP/connection outcome, graph problems and missing/extra/mismatched workers.
 
-These are distinct native paths in tagged v1.19.2:
-`pkg/webhooks/resource/generation/handler.go` (`syncTriggerAction`) handles trigger
-deletion and losing a match; `pkg/background/generate` processes downstream
-cleanup; `pkg/policy/generate.go` handles existing sources. Native behavior was
-accepted from real API outcomes, not inferred from `synchronize` or readiness.
-The ClusterPolicy API is supported but deprecated in this pinned release;
-migration to CEL policy kinds is future work, not an implicit version upgrade.
+This file is lifecycle bookkeeping, not mounted into the orchestrator, not a
+fallback registry and never an execution input. It does not replace fresh POST
+snapshot validation or freeze discovery after startup.
 
-`rbac.yaml` adds **only** Service get/list/watch, aggregated into Kyverno admission,
-background and reports controller roles. Cluster-wide reads are necessary because
-v1.19.2 `pkg/policy/policy_controller.go:getResources` lists ClusterPolicy triggers
-across namespaces before evaluating namespace selectors; reporting also uses
-cluster-wide informers. Namespace labels are selection, not authorization.
-The already-installed pinned chart grants background ConfigMap CRUD cluster-wide;
-this task adds no write privileges and does not alter that shared baseline.
-A hardened installation must explicitly provide background ConfigMap CRUD in
-each worker namespace (for example namespace RoleBindings to a ConfigMap-only
-role) if those chart defaults are removed. Adding a namespace label alone cannot
-replace those grants. No orchestrator or Secret permissions are added.
-
-Re-run `policies:install` after namespace/RBAC setup, and run the live lifecycle
-test on the exact pinned controller build. These tests do not certify cleanup
-across controller downtime, policy drift, or arbitrary version upgrades. Local
-macOS/arm64 proof is not a substitute for current-head Linux CI; historical
-Task10 Linux PR lifecycle success is recorded in [versions](versions.md).
-
-## Enable the observed registry, independently of scaling
-
-After the baseline and policy lifecycle pass, with no active executions/scalers:
-
-```sh
-mise run apps:deploy-discovery
-mise run test:registry
-mise run test:rbac
-mise exec -- bash scripts/discovery.sh restore
-```
-
-Deployment verifies policies Ready, snapshots the static baseline, builds/loads
-current apps, validates the graph and live API, and applies the same buffered
-render. Four workers remain fixed at one. The retained rollback snapshot is
-`.local/task9/static-baseline`; restore it before another deployment. Failures
-attempt native restoration; cleanup errors remain task failures.
-
-The orchestrator's own service account has Namespace get/list/watch via a
-ClusterRole, and ConfigMap get/list/watch through a Role/RoleBinding in **each**
-worker namespace. It cannot read ConfigMaps cluster-wide, Services or Secrets,
-or write resources. A new labeled namespace needs its own grant. Label changes
-start/stop namespace watchers; missing/revoked grants fail synchronization closed
-instead of publishing a silently incomplete authorized subset. Live tests exercise
-namespace add/remove, RoleBinding loss/recovery and actual impersonation allow/deny.
-
-Only registration-labeled ConfigMaps are strictly decoded. Source metadata is
-validated structurally, but source UID is diagnostic and excluded from the plan
-hash; the reader does not independently read Services to authenticate provenance.
-Namespace labelers and Service/registration writers are trusted. Namespace labels
-select scope, not security isolation. Chart-default Kyverno permissions described
-above are broader than the orchestrator's least-privilege grants.
-
-Every selected cache must synchronize, including reconnect/relist barriers. Watch
-requests use a 10-second server timeout and 15-second client deadline; transient
-watch loss has at most 30 seconds' recovery grace from disconnection. Idle healthy
-watches never expire simply because no resource changed. Authorization errors
-fail closed without waiting for that grace. Recovery does not require API restart.
-
-Snapshots are copied/immutable and validated through the shared plan builder.
-Invalid or empty observed graphs block new starts; existing keyed executions
-still replay from durable history. Already-started plans do not change when
-registrations do. `/workers` exposes synced/plan/hash/problems for diagnosis.
-
-**Wait for the intended names and hash.** Reconciliation is eventual, not an
-atomic rollout: a partially registered graph can itself be valid. Ready/nonempty
-alone cannot establish that the complete intended deployment is visible. Never
-remove/upgrade workers incompatibly during active runs; snapshot immutability
-does not keep their Deployments alive. [Architecture](architecture.md) explains
-the three complementary validation layers.
+Use `curl -sS http://127.0.0.1:18080/graph | jq` to inspect diagnostics. See the
+[API contract](api.md) for 200/422/503 semantics and [test ownership](testing.md)
+for independent informer race cases.

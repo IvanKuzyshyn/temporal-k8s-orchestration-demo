@@ -23,7 +23,7 @@ description = "DESTRUCTIVE: delete the owned demo cluster and all local workflow
 run = "bash scripts/local.sh destroy"
 
 [tasks.test]
-run = "go test -race ./..."
+run = "go test -race -count=1 ./..."
 
 [tasks."test:integration"]
 description = "Test the full lifecycle on a new disposable cluster; refuses existing demo resources"
@@ -34,7 +34,8 @@ run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
 if [ -n "$files" ]; then printf 'Go files need gofmt:\n%s\n' "$files"; exit 1; fi
-go test -race ./...
+# External Helm/shell/policy inputs must be exercised even with a warm Go cache.
+go test -race -count=1 ./...
 go vet ./...
 for script in scripts/*.sh; do bash -n "$script"; done
 bash scripts/validate-manifests.sh

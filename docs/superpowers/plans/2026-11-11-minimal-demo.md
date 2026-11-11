@@ -1,5 +1,9 @@
 # Minimal Full Demo Implementation Plan
 
+> Approved planning baseline, preserved as written. Subsequent authorized execution
+> and verification are tracked in [the execution record](2026-11-11-minimal-demo-execution.md).
+> The original unchecked steps below are not a current implementation status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Support only the full kind/Kyverno/KEDA demo through up, body-free workflow POST, down and destroy, retaining idempotency and replacing graph CLI validation with a read-only API plus offline tests.
