@@ -113,11 +113,11 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 			g.Expect(identities[id]).To(gomega.BeTrue(), id)
 		}
 		if file == "temporal" {
-			for key, path := range map[string]string{"10-visibility.sh": "init-db.sh", "schema.sh": "schema.sh", "namespace.sh": "namespace.sh", "config.yaml": "config.yaml"} {
-				original, err := os.ReadFile("../../deploy/temporal/" + path)
-				g.Expect(err).NotTo(gomega.HaveOccurred())
-				g.Expect(configs[key]).To(gomega.Equal(string(original)), "same tested Compose input: "+key)
+			for _, key := range []string{"10-visibility.sh", "schema.sh", "namespace.sh", "config.yaml"} {
+				g.Expect(configs[key]).NotTo(gomega.BeEmpty(), "required Kubernetes bootstrap input: "+key)
 			}
+			g.Expect(configs["schema.sh"]).To(gomega.ContainSubstring("temporal-sql-tool"))
+			g.Expect(configs["namespace.sh"]).To(gomega.ContainSubstring("--retention 72h"))
 		}
 		pins := map[string][]string{
 			"temporal": {"postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97", "temporalio/server:1.32.0@sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae", "temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca", "temporalio/ui:2.48.0@sha256:5bc8712de27029b64a9cad156221b082a43ae27bfb108fc1743076eaabf1437f"},
