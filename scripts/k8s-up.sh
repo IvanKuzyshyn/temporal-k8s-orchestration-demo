@@ -2,6 +2,8 @@
 set -euo pipefail
 source "$(dirname "$0")/kind-common.sh"
 source k8s/infrastructure/versions.env
+mode=${1:-baseline}
+[[ $mode == baseline || $mode == full ]] || { echo 'Usage: k8s-up.sh [baseline|full]' >&2; exit 2; }
 mkdir -p .local
 clusters=$(kind get clusters)
 if ! grep -Fxq "$CLUSTER" <<<"$clusters"; then
@@ -110,8 +112,17 @@ fi
 docker build -f deploy/orchestrator.Dockerfile -t "temporal-demo/orchestrator:$tag" .
 docker build -f deploy/worker.Dockerfile -t "temporal-demo/worker:$tag" .
 kind load docker-image --name "$CLUSTER" "temporal-demo/orchestrator:$tag" "temporal-demo/worker:$tag"
+values=k8s/worker-helm-chart/values-static.yaml
+bootstrap=false
+if [[ $mode == full ]]; then
+  bash scripts/policies-install.sh
+  values=k8s/worker-helm-chart/values-local.yaml
+  # Never take replica ownership back on a partial-bootstrap retry.
+  workers=$(k get deployments -A -o json | jq '[.items[] | select(.metadata.namespace | startswith("temporal-demo-worker-"))] | length')
+  [[ $workers != 0 ]] || bootstrap=true
+fi
 helm template temporal-demo k8s/worker-helm-chart \
-  -f k8s/worker-helm-chart/values-static.yaml \
+  -f "$values" --set "scaling.bootstrapZero=$bootstrap" \
   --set-string "images.tag=$tag" --kube-version 1.35.8 >"$work/apps.yaml"
 go run ./cmd/validate-graph <"$work/apps.yaml"
 
@@ -119,10 +130,40 @@ go run ./cmd/validate-graph <"$work/apps.yaml"
 # Graph failure must occur before even this application-bootstrap mutation.
 k apply -f "$work/apps.yaml" -l temporal-demo.io/phase=namespace
 bash scripts/validate-k8s.sh "$work/apps.yaml"
+# A previous bootstrap may have stopped before relinquishing replica ownership.
+# Drop only replicas from existing last-applied annotations before the replica-free
+# retry; otherwise client-side apply can delete spec.replicas and default it to 1.
+if [[ $mode == full && $bootstrap == false ]]; then
+  for worker in worker-a worker-b worker-c worker-d; do
+    deployment=$(k -n "temporal-demo-$worker" get deployment "$worker" --ignore-not-found -o json)
+    [[ -n $deployment ]] || continue
+    previous=$(jq -r '.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"] // empty' <<<"$deployment")
+    if [[ -n $previous ]]; then
+      previous=$(jq -c 'del(.spec.replicas)' <<<"$previous")
+      k -n "temporal-demo-$worker" annotate deployment "$worker" \
+        "kubectl.kubernetes.io/last-applied-configuration=$previous" --overwrite
+    fi
+  done
+fi
 # Apply exactly the validated bytes, not a second Helm render/release.
 k apply -f "$work/apps.yaml"
 k -n temporal-demo-orchestrator rollout status deployment/orchestrator --timeout=180s
-for worker in worker-a worker-b worker-c worker-d; do
-  k -n "temporal-demo-$worker" rollout status "deployment/$worker" --timeout=180s
-done
-echo 'PASS: temporal-demo ready; fixed replicas, static registry, no policies/scaling; history retained'
+if [[ $mode == full ]]; then
+  # Remove bootstrap replicas from apply's ownership without modifying live replicas.
+  helm template temporal-demo k8s/worker-helm-chart -f "$values" \
+    --set-string "images.tag=$tag" --kube-version 1.35.8 >"$work/steady.yaml"
+  mkdir -p .local/lifecycle
+  go run ./cmd/validate-graph <"$work/steady.yaml" >.local/lifecycle/plan-hash
+  bash scripts/validate-k8s.sh "$work/steady.yaml"
+  k apply set-last-applied -f "$work/steady.yaml" --create-annotation=true
+  k apply -f "$work/steady.yaml"
+  for worker in worker-a worker-b worker-c worker-d; do
+    k -n "temporal-demo-$worker" wait --for=condition=Ready "scaledobject/$worker" --timeout=180s
+  done
+  echo 'PASS: full local discovery/scaling deployed; history retained'
+else
+  for worker in worker-a worker-b worker-c worker-d; do
+    k -n "temporal-demo-$worker" rollout status "deployment/$worker" --timeout=180s
+  done
+  echo 'PASS: temporal-demo ready; fixed replicas, static registry, no policies/scaling; history retained'
+fi

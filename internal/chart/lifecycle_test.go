@@ -25,14 +25,14 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 		gomega.NewWithT(t).Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 	}
 	for _, controller := range []string{"keda", "kyverno"} {
-		for _, scenario := range []string{"rerun", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "failed validation", "failed graph"} {
+		for _, scenario := range []string{"rerun", "full", "full-retry", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "failed validation", "failed graph"} {
 			t.Run(controller+"/"+scenario, func(t *testing.T) {
 				g := gomega.NewWithT(t)
 				root := t.TempDir()
 				for _, dir := range []string{"scripts", "tools", ".local"} {
 					g.Expect(os.MkdirAll(filepath.Join(root, dir), 0700)).To(gomega.Succeed())
 				}
-				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq"} {
+				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq", "scripts/policies-install.sh"} {
 					b, err := os.ReadFile("../../" + path)
 					g.Expect(err).NotTo(gomega.HaveOccurred(), "direct rerunnable up entrypoint")
 					g.Expect(os.WriteFile(filepath.Join(root, path), b, 0600)).To(gomega.Succeed())
@@ -69,6 +69,13 @@ exec "` + realHelm + `" "$@"`,
 					"kubectl": `[[ $* == *'--kubeconfig '* && $* == *'--context kind-temporal-demo'* || $* == *'config current-context'* ]] || exit 97
 while [[ $1 == --* ]]; do case "$1" in --*=*) shift;; *) shift 2;; esac; done
 if [[ $1 == config ]]; then echo kind-temporal-demo; exit; fi
+if [[ $1 == auth ]]; then echo yes; exit; fi
+if [[ $1 == get && $2 == deployments ]]; then
+ if [[ $SCENARIO == full-retry ]]; then echo '{"items":[{"metadata":{"name":"worker-a","namespace":"temporal-demo-worker-a"}}]}'; else echo '{"items":[]}'; fi; exit
+fi
+if [[ $SCENARIO == full-retry && $* == *'get deployment worker-'* ]]; then
+ echo '{"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{\"spec\":{\"replicas\":0}}"}}}'; exit
+fi
 printf '%s\n' "$*" >> "$STATE/calls"
 if [[ $1 == get && $* == *validatingwebhookconfigurations* ]]; then
  printf '{"items":['
@@ -112,7 +119,11 @@ fi`,
 					g.Expect(os.WriteFile(filepath.Join(root, "tools", name), []byte("#!/usr/bin/env bash\nset -euo pipefail\n"+body+"\n"), 0755)).To(gomega.Succeed())
 				}
 				run := func() ([]byte, error) {
-					cmd := exec.Command("bash", filepath.Join(root, "scripts/k8s-up.sh"))
+					args := []string{filepath.Join(root, "scripts/k8s-up.sh")}
+					if strings.HasPrefix(scenario, "full") {
+						args = append(args, "full")
+					}
+					cmd := exec.Command("bash", args...)
 					cmd.Env = append(os.Environ(), "KUBECONFIG=", "STATE="+root, "SCENARIO="+scenario, "CONTROLLER="+controller, "PATH="+filepath.Join(root, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
 					return cmd.CombinedOutput()
 				}
@@ -150,7 +161,19 @@ fi`,
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 				calls, _ = os.ReadFile(filepath.Join(root, "calls"))
 				text = string(calls)
-				g.Expect(strings.Count(text, "render-apps\n")).To(gomega.Equal(2), "exactly one application render per up")
+				renders := 2
+				if strings.HasPrefix(scenario, "full") {
+					renders = 4
+					if scenario == "full-retry" {
+						annotation := strings.Index(text, "annotate deployment worker-a")
+						g.Expect(annotation).To(gomega.BeNumerically(">=", 0), "retry must relinquish last-applied replica ownership")
+						g.Expect(annotation).To(gomega.BeNumerically("<", strings.Index(text, "apply-apps")))
+					}
+					g.Expect(text).To(gomega.ContainSubstring("apply set-last-applied"))
+					g.Expect(text).To(gomega.ContainSubstring("wait --for=condition=Ready scaledobject/worker-a"))
+					g.Expect(text).NotTo(gomega.ContainSubstring("rollout status deployment/worker-a"))
+				}
+				g.Expect(strings.Count(text, "render-apps\n")).To(gomega.Equal(renders))
 				g.Expect(text).NotTo(gomega.ContainSubstring("create secret"))
 				g.Expect(text).NotTo(gomega.ContainSubstring("delete cluster"))
 				stages := []string{"apply-keda-namespace", "apply-kyverno-namespace", "phase=postgres", "rollout status statefulset/postgres", "phase=schema", "wait --for=condition=complete job/temporal-schema", "phase=server", "rollout status deployment/temporal ", "phase=namespace-job", "wait --for=condition=complete job/temporal-namespace", "phase=ui", "apply-keda-crds", "apply-kyverno-crds", "wait --for=condition=Established crd -l app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance", "wait --for=condition=Established crd -l temporal-demo.io/phase=crds", "apply-keda-controllers", "apply-kyverno-controllers", "rollout status deployment/keda-admission-webhooks", "rollout status deployment/kyverno-reports-controller", "get validatingwebhookconfigurations,mutatingwebhookconfigurations", "build\n", "load\n", "graph\n", "bootstrap-apps", "validate-apps", "apply-apps", "rollout status deployment/orchestrator"}

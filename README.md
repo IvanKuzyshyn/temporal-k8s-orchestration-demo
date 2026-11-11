@@ -3,8 +3,9 @@
 A body-free HTTP request snapshots a validated diamond graph:
 `worker-a → worker-b/worker-c → worker-d`. Temporal runs the parent and children;
 each child/activity carries **only worker identity**, not business data.
-Compose is the fast static, always-on development path. Kind is the integration
-path for native KEDA scale-to-zero and Kyverno registration discovery.
+`mise run up` starts the full local kind demo with native KEDA scale-to-zero
+and Kyverno registration discovery. Compose remains an optional static,
+always-on development path; separate kind experiment tasks remain available.
 
 ## Prerequisites
 
@@ -24,6 +25,94 @@ Tested host/container architectures, exact pins and evidence provenance are in
 [versions](docs/versions.md). Darwin ARM64 uses Linux ARM64 Docker containers.
 Linux amd64 hosted CI is a separate gate; other platforms are not certified.
 This is a localhost demo without production authentication, HA or external backup.
+
+## Full local demo — three lifecycle commands
+
+With Docker running, from this checkout:
+
+```sh
+mise install
+mise run up
+```
+
+`up` creates/configures the dedicated `temporal-demo` kind cluster, installs
+PostgreSQL, Temporal, KEDA and Kyverno, builds/loads the apps, enables live worker
+discovery and scale-to-zero, and waits for the **complete intended registry** and
+API/UI readiness. No baseline deployment or separate policy/scaling steps are
+needed. Idle worker Deployments have zero replicas; the orchestrator stays up.
+
+On success it prints:
+
+```text
+Temporal UI: http://127.0.0.1:18088
+API:         http://127.0.0.1:18080
+```
+
+Open the UI and select Temporal namespace **default**. Trigger a new workflow:
+
+```sh
+curl -fsS -X POST http://127.0.0.1:18080/runs
+```
+
+Every unkeyed POST starts a new execution. Send **no body**, not `{}`. For safe
+retries, choose a unique key once and keep reusing it if the response is lost:
+
+```sh
+curl -fsS -X POST -H 'Idempotency-Key: my-first-run' http://127.0.0.1:18080/runs
+workflow_id='paste-workflowId-here'
+curl -fsS "http://127.0.0.1:18080/runs/$workflow_id"
+```
+
+The parent runs `worker-a`, then `worker-b` and `worker-c` concurrently, then
+`worker-d`. KEDA activates workers as tasks arrive; after idle cooldown they
+return to zero. Observe histories and children in the UI, or inspect Kubernetes:
+
+```sh
+mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" \
+  --context kind-temporal-demo get pods -A
+mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" \
+  --context kind-temporal-demo get scaledobjects -A
+mise run kind:diagnostics
+```
+
+Stop or remove the demo:
+
+```sh
+mise run down       # stop tunnels + kind node; retain cluster and all history
+mise run up         # resume retained cluster; restore API/UI tunnels
+mise run destroy    # DESTRUCTIVE: delete this owned cluster and all local history
+```
+
+`down` stops the verified Docker node container, not Docker itself. It interrupts
+active work; it is **not** a graceful workflow pause, and Temporal deadlines can
+expire while stopped. `destroy` also removes the checkout's kubeconfig and
+lifecycle records, but leaves shared Docker images, chart caches, other clusters
+and Compose projects alone. Docker must be running even for down/destroy.
+
+The tunnels run in the background; logs and ownership records live in ignored
+`.local/lifecycle/`. Repeated `up` replaces only its own tunnels and resumes the
+installed stack **without rebuilding images, rerunning schema Jobs, or resetting
+replicas**. Source changes are not automatically redeployed on repeat up; for a
+fresh build, deliberately destroy/recreate (losing local history). Port overrides:
+
+```sh
+API_FORWARD_PORT=19080 UI_FORWARD_PORT=19088 mise run up
+```
+
+A port occupied by another process fails safely; the script never kills it.
+Lifecycle commands are serialized within the checkout. After an uncatchable
+interruption, verify no lifecycle command is running before removing a stale
+`.local/lifecycle.lock` directory. An incomplete application bootstrap can be
+retried with `up`; failures during kind creation itself may need explicit cleanup.
+
+**Ownership:** use these commands from the same checkout/worktree. They refuse
+an existing cluster without its recorded Docker identity rather than adopting it.
+If you already have a legacy `k8s:up` cluster, keep using its existing commands,
+or deliberately delete it from its original checkout with `mise run k8s:down`
+(**loses history**) before starting this path. Do not mix the full lifecycle with
+baseline/scaling/discovery acceptance experiments; those have different fixture
+and restoration contracts. Only one named `temporal-demo` cluster can exist on
+the Docker daemon at a time. Unset a foreign `KUBECONFIG` before running tasks.
 
 ## Compose quick start — no Kubernetes
 
@@ -91,7 +180,11 @@ and volume; its destructive reset never targets the parent or ordinary demo.
 Do not use global Docker prune. `compose:cleanup` is CI-only and requires its
 exact `temporal-demo-ci-<run-id>-<attempt>` identity.
 
-## Kind quick start — fixed replicas, static registry first
+## Advanced kind integration experiments — static baseline first
+
+These are the isolated acceptance-test workflows, **not required** for the full
+local demo above. Start with a separate, deliberately reset demo cluster before
+switching between these experiments and the persistent full lifecycle.
 
 The named cluster is **temporal-demo**, not an arbitrary current context.
 Leave unrelated clusters and Compose projects alone. Unset a foreign
