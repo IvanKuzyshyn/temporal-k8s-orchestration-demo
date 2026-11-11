@@ -10,7 +10,7 @@ type Snapshot struct {
 }
 
 // Provider returns a deep copy owned by the caller on every access.
-// A future live provider must set Synced false on incomplete discovery and expose
+// The live provider sets Synced false on incomplete discovery and exposes
 // invalid state through Problems rather than serving a stale-valid plan.
 type Provider interface{ Snapshot() Snapshot }
 

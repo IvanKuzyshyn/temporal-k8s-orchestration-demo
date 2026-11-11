@@ -19,7 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// Kubernetes mode must use the live adapter, not read RegistryFile or kill HTTP
+// The process must use the live adapter and must not kill HTTP
 // when the graph is invalid. Readiness follows synchronization, not validity.
 func TestProcessKubernetesDiscovery(t *testing.T) {
 	g := gomega.NewWithT(t)
@@ -31,10 +31,6 @@ func TestProcessKubernetesDiscovery(t *testing.T) {
 		switch key {
 		case "HTTP_ADDR":
 			return addr
-		case "REGISTRY_MODE":
-			return "kubernetes"
-		case "REGISTRY_FILE":
-			return "/must/not/be/read"
 		}
 		return ""
 	})
@@ -66,8 +62,9 @@ func TestProcessKubernetesDiscovery(t *testing.T) {
 		return res.StatusCode
 	}
 	g.Eventually(func() int { return status("/readyz") }, 5*time.Second).Should(gomega.Equal(200))
-	res, err := hc.Get("http://" + addr + "/workers")
+	res, err := hc.Get("http://" + addr + "/graph")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(res.StatusCode).To(gomega.Equal(422))
 	defer res.Body.Close()
 	b, err := io.ReadAll(res.Body)
 	g.Expect(err).NotTo(gomega.HaveOccurred())

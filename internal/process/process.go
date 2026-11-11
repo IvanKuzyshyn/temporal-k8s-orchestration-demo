@@ -122,22 +122,14 @@ func run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 	discoveryErr := make(chan error, 1)
 	discoveryDone := make(chan struct{})
 	if role == "orchestrator" {
-		switch c.RegistryMode {
-		case "kubernetes":
-			kc, err := newKubernetes()
-			if err != nil {
-				return err
-			}
-			live := registry.NewKubernetes(kc, c.WorkerNamespaceSelector)
-			provider = live
-			go func() { defer close(discoveryDone); discoveryErr <- live.Run(discovery) }()
-			defer func() { stopDiscovery(); <-discoveryDone }()
-		default:
-			provider, err = registry.LoadStatic(c.RegistryFile)
-			if err != nil {
-				return err
-			}
+		kc, err := newKubernetes()
+		if err != nil {
+			return err
 		}
+		live := registry.NewKubernetes(kc, c.WorkerNamespaceSelector)
+		provider = live
+		go func() { defer close(discoveryDone); discoveryErr <- live.Run(discovery) }()
+		defer func() { stopDiscovery(); <-discoveryDone }()
 	}
 	h := &health{}
 	// Serve liveness throughout bounded startup; readiness cannot touch the client
@@ -196,7 +188,7 @@ func run(ctx context.Context, role string, c runtimeconfig.Config, logger *slog.
 		handler.Store(route{api.New(provider, runs.New(provider, runs.NewTemporal(temporal)), h.ready)})
 	} else {
 		poller.RegisterWorkflowWithOptions(child.Child, workflow.RegisterOptions{Name: contracts.ChildWorkflowName})
-		poller.RegisterActivityWithOptions(activities.New(c.WorkerName, c.ActivityDuration).Example, activity.RegisterOptions{Name: contracts.ExampleActivityName})
+		poller.RegisterActivityWithOptions(activities.New(c.WorkerName, 5*time.Second).Example, activity.RegisterOptions{Name: contracts.ExampleActivityName})
 	}
 	defer func() {
 		h.state.Store(workerStopped)

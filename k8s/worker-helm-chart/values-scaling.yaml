@@ -1,7 +1,0 @@
-# Native KEDA experiment; static discovery remains unchanged.
-scaling:
-  enabled: true
-  bootstrapZero: false
-  pollingInterval: 5
-  cooldownPeriod: 120
-  includeRunningWorkflowCount: false

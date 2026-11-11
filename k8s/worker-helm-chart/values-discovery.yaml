@@ -1,8 +1,0 @@
-# Explicit Task 9 phase: policy readiness is a deployment prerequisite.
-# Fixed workers isolate discovery from the separate native scaling experiment.
-registry:
-  mode: kubernetes
-  namespaceSelector: temporal-demo.io/worker-namespace=true
-scaling:
-  enabled: false
-replicas: 1

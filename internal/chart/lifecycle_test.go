@@ -25,7 +25,7 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 		gomega.NewWithT(t).Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 	}
 	for _, controller := range []string{"keda", "kyverno"} {
-		for _, scenario := range []string{"rerun", "full", "full-retry", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "failed validation", "failed graph"} {
+		for _, scenario := range []string{"rerun", "full-retry", "unpaired storage", "failed schema", "template failure", "download failure", "tampered cache", "failed validation"} {
 			t.Run(controller+"/"+scenario, func(t *testing.T) {
 				g := gomega.NewWithT(t)
 				root := t.TempDir()
@@ -64,7 +64,7 @@ exec "` + realHelm + `" "$@"`,
 					"git":         `case "$1" in rev-parse) echo abc123456789;; status) :;; *) exit 91;; esac`,
 					"docker":      `[[ $1 == build ]] || exit 92; echo build >> "$STATE/calls"`,
 					"kind":        `case "$1 $2" in 'get clusters') echo temporal-demo;; 'load docker-image') echo load >> "$STATE/calls";; *) exit 93;; esac`,
-					"go":          `cat > "$STATE/graph.yaml"; echo graph >> "$STATE/calls"; [[ $SCENARIO != 'failed graph' ]]`,
+					"go":          `echo 'runtime graph CLI is forbidden' >&2; exit 99`,
 					"kubeconform": `echo 'offline validator must not run' >&2; exit 99`,
 					"kubectl": `[[ $* == *'--kubeconfig '* && $* == *'--context kind-temporal-demo'* || $* == *'config current-context'* ]] || exit 97
 while [[ $1 == --* ]]; do case "$1" in --*=*) shift;; *) shift 2;; esac; done
@@ -109,7 +109,6 @@ if [[ $1 == apply ]]; then
  fi; done
  done
  for arg in "$@"; do if [[ $arg == */apps.yaml ]]; then
-  cmp "$arg" "$STATE/graph.yaml"
   if [[ $* == *'-l temporal-demo.io/phase=namespace'* ]]; then
    echo bootstrap-apps >> "$STATE/calls"
   elif [[ $* == *'--dry-run=server'* ]]; then
@@ -127,9 +126,6 @@ fi`,
 				}
 				run := func() ([]byte, error) {
 					args := []string{filepath.Join(root, "scripts/k8s-up.sh")}
-					if strings.HasPrefix(scenario, "full") {
-						args = append(args, "full")
-					}
 					cmd := exec.Command("bash", args...)
 					cmd.Env = append(os.Environ(), "KUBECONFIG=", "STATE="+root, "SCENARIO="+scenario, "CONTROLLER="+controller, "PATH="+filepath.Join(root, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
 					return cmd.CombinedOutput()
@@ -155,12 +151,9 @@ fi`,
 					g.Expect(text).NotTo(gomega.ContainSubstring("build\n"))
 					return
 				}
-				if scenario == "failed validation" || scenario == "failed graph" {
+				if scenario == "failed validation" {
 					g.Expect(err).To(gomega.HaveOccurred(), string(out))
 					g.Expect(text).NotTo(gomega.ContainSubstring("apply-apps"))
-					if scenario == "failed graph" {
-						g.Expect(text).NotTo(gomega.ContainSubstring("bootstrap-apps"))
-					}
 					return
 				}
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out)+"\n"+text)
@@ -168,22 +161,18 @@ fi`,
 				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
 				calls, _ = os.ReadFile(filepath.Join(root, "calls"))
 				text = string(calls)
-				renders := 2
-				if strings.HasPrefix(scenario, "full") {
-					renders = 4
-					if scenario == "full-retry" {
-						annotation := strings.Index(text, "annotate deployment worker-a")
-						g.Expect(annotation).To(gomega.BeNumerically(">=", 0), "retry must relinquish last-applied replica ownership")
-						g.Expect(annotation).To(gomega.BeNumerically("<", strings.Index(text, "apply-apps")))
-					}
-					g.Expect(text).To(gomega.ContainSubstring("apply set-last-applied"))
-					g.Expect(text).To(gomega.ContainSubstring("wait --for=condition=Ready scaledobject/worker-a"))
-					g.Expect(text).NotTo(gomega.ContainSubstring("rollout status deployment/worker-a"))
+				if scenario == "full-retry" {
+					annotation := strings.Index(text, "annotate deployment worker-a")
+					g.Expect(annotation).To(gomega.BeNumerically(">=", 0))
+					g.Expect(annotation).To(gomega.BeNumerically("<", strings.Index(text, "apply-apps")))
 				}
-				g.Expect(strings.Count(text, "render-apps\n")).To(gomega.Equal(renders))
+				g.Expect(text).To(gomega.ContainSubstring("apply set-last-applied"))
+				g.Expect(text).To(gomega.ContainSubstring("wait --for=condition=Ready scaledobject/worker-a"))
+				g.Expect(text).NotTo(gomega.ContainSubstring("rollout status deployment/worker-a"))
+				g.Expect(strings.Count(text, "render-apps\n")).To(gomega.Equal(4))
 				g.Expect(text).NotTo(gomega.ContainSubstring("create secret"))
 				g.Expect(text).NotTo(gomega.ContainSubstring("delete cluster"))
-				stages := []string{"apply-keda-namespace", "apply-kyverno-namespace", "phase=postgres", "rollout status statefulset/postgres", "phase=schema", "wait --for=condition=complete job/temporal-schema", "phase=server", "rollout status deployment/temporal ", "phase=namespace-job", "wait --for=condition=complete job/temporal-namespace", "phase=ui", "apply-keda-crds", "apply-kyverno-crds", "wait --for=condition=Established crd -l app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance", "wait --for=condition=Established crd -l temporal-demo.io/phase=crds", "apply-keda-controllers", "apply-kyverno-controllers", "rollout status deployment/keda-admission-webhooks", "rollout status deployment/kyverno-reports-controller", "get validatingwebhookconfigurations,mutatingwebhookconfigurations", "build\n", "load\n", "graph\n", "bootstrap-apps", "validate-apps", "apply-apps", "rollout status deployment/orchestrator"}
+				stages := []string{"apply-keda-namespace", "apply-kyverno-namespace", "phase=postgres", "rollout status statefulset/postgres", "phase=schema", "wait --for=condition=complete job/temporal-schema", "phase=server", "rollout status deployment/temporal ", "phase=namespace-job", "wait --for=condition=complete job/temporal-namespace", "phase=ui", "apply-keda-crds", "apply-kyverno-crds", "wait --for=condition=Established crd -l app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance", "wait --for=condition=Established crd -l temporal-demo.io/phase=crds", "apply-keda-controllers", "apply-kyverno-controllers", "rollout status deployment/keda-admission-webhooks", "rollout status deployment/kyverno-reports-controller", "get validatingwebhookconfigurations,mutatingwebhookconfigurations", "build\n", "load\n", "bootstrap-apps", "validate-apps", "apply-apps", "rollout status deployment/orchestrator"}
 				pos := 0
 				for _, stage := range stages {
 					idx := strings.Index(text[pos:], stage)

@@ -1,5 +1,0 @@
-apiVersion: validation.temporal-demo.invalid/v1
-kind: UnknownValidationControl
-metadata:
-  name: api-validation-control
-  namespace: temporal-demo-worker-a

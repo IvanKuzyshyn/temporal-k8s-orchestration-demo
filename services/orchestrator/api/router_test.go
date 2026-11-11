@@ -269,7 +269,7 @@ func TestHTTPErrorStatusesAndRedaction(t *testing.T) {
 	g.Expect(request(h, "POST", "/runs", "").Code).To(Equal(503))
 	g.Expect(f.starts).To(BeZero())
 }
-func TestHealthReadinessAndInvalidWorkersDiagnostics(t *testing.T) {
+func TestHealthReadinessAndInvalidGraphDiagnostics(t *testing.T) {
 	g := NewWithT(t)
 	p, f, _ := fixture(t)
 	p.s.Problems = []string{"cycle"}
@@ -281,13 +281,14 @@ func TestHealthReadinessAndInvalidWorkersDiagnostics(t *testing.T) {
 	})
 	g.Expect(request(h, "GET", "/readyz", "").Code).To(Equal(200))
 	g.Expect(request(h, "GET", "/healthz", "").Code).To(Equal(200))
-	w := request(h, "GET", "/workers", "")
-	g.Expect(w.Code).To(Equal(200))
+	g.Expect(request(h, "GET", "/workers", "").Code).To(Equal(404))
+	w := request(h, "GET", "/graph", "")
+	g.Expect(w.Code).To(Equal(422))
 	g.Expect(w.Body.String()).To(ContainSubstring("cycle"))
 	g.Expect(w.Body.String()).To(ContainSubstring(p.s.Plan.Hash))
 	p.s.Synced = false
 	g.Expect(request(h, "GET", "/readyz", "").Code).To(Equal(503))
-	g.Expect(request(h, "GET", "/workers", "").Code).To(Equal(200))
+	g.Expect(request(h, "GET", "/graph", "").Code).To(Equal(503))
 	g.Expect(request(h, "GET", "/healthz", "").Code).To(Equal(200))
 	p.s.Synced = true
 	h = api.New(p, runs.New(p, f), func(context.Context) error { return errors.New("secret") })

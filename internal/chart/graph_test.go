@@ -17,7 +17,7 @@ import (
 )
 
 func TestDemoGraphProjection(t *testing.T) {
-	b, err := render(t, "-f", "../../k8s/worker-helm-chart/values-local.yaml")
+	b, err := render(t)
 	if err != nil {
 		t.Fatal(err, string(b))
 	}

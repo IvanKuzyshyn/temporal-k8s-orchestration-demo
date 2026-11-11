@@ -2,7 +2,6 @@ package chart
 
 import (
 	"bytes"
-	"encoding/json"
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/manifest"
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/plan"
 	"github.com/onsi/gomega"
@@ -11,8 +10,7 @@ import (
 	"testing"
 )
 
-// Renaming values must update Services, queue env, namespaces and static
-// registrations together; a copied default identity in any template breaks this.
+// Renaming values must update Services, queues and namespaces together.
 func TestValuesDriveAllIdentities(t *testing.T) {
 	g := gomega.NewWithT(t)
 	b, err := render(t, "--set-json", `workers=[{"name":"alpha","runAfter":""},{"name":"beta","runAfter":"alpha"}]`)
@@ -27,7 +25,6 @@ func TestValuesDriveAllIdentities(t *testing.T) {
 	g.Expect(p.Nodes[1].Dependencies).To(gomega.Equal([]string{"alpha"}))
 	decoder := yaml.NewDecoder(bytes.NewReader(b))
 	deployments := map[string]string{}
-	var static []plan.Registration
 	for {
 		var r resource
 		err := decoder.Decode(&r)
@@ -35,9 +32,6 @@ func TestValuesDriveAllIdentities(t *testing.T) {
 			break
 		}
 		g.Expect(err).NotTo(gomega.HaveOccurred())
-		if r.Kind == "ConfigMap" && r.Metadata.Name == "static-registry" {
-			g.Expect(json.Unmarshal([]byte(r.Data["workers.json"]), &static)).To(gomega.Succeed())
-		}
 		if r.Kind != "Deployment" || r.Metadata.Name == "orchestrator" {
 			continue
 		}
@@ -52,7 +46,4 @@ func TestValuesDriveAllIdentities(t *testing.T) {
 		}
 	}
 	g.Expect(deployments).To(gomega.Equal(map[string]string{"alpha": "alpha.v1.temporal", "beta": "beta.v1.temporal"}))
-	sp, err := plan.Build(static)
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	g.Expect(sp).To(gomega.Equal(p))
 }
