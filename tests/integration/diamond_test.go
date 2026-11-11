@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -431,6 +432,30 @@ func TestDiamondFromZero(t *testing.T) {
 	t.Logf("all-worker zero after completion/replay checks=%s; full smoke=%s", time.Since(finished).Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 }
 
+// registerSnapshotIsolationCleanup is the snapshot experiment's cleanup only.
+// Keeping registration separate lets offline tests exercise real FailNow flow.
+func (h *acceptanceHarness) registerSnapshotIsolationCleanup(scalerUID string, scalerAnnotations map[string]string) {
+	patch, err := json.Marshal([]map[string]any{{"op": "test", "path": "/metadata/uid", "value": scalerUID}, {"op": "add", "path": "/metadata/annotations", "value": scalerAnnotations}})
+	h.g.Expect(err).NotTo(gomega.HaveOccurred())
+	// Independent testing.T callbacks run even if another callback calls
+	// FailNow. Registry convergence must not gate the scaler's rollback.
+	h.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cleanup := *h
+		cleanup.ctx = ctx // experiment deadline may already have expired
+		cleanup.annotation(false)
+	})
+	h.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "kubectl", h.argv("-n", "temporal-demo-worker-a", "patch", "scaledobject", "worker-a", "--type=json", "-p", string(patch))...).CombinedOutput()
+		if err != nil {
+			h.t.Errorf("restore snapshot scaler: %v: %s", err, out)
+		}
+	})
+}
+
 func TestPlanSnapshotIsolation(t *testing.T) {
 	h := newAcceptanceHarness(t)
 	h.preflight()
@@ -446,13 +471,7 @@ func TestPlanSnapshotIsolation(t *testing.T) {
 		}
 	}
 	h.g.Expect(json.Unmarshal(h.k("-n", "temporal-demo-worker-a", "get", "scaledobject", "worker-a", "-o", "json"), &scaler)).To(gomega.Succeed())
-	t.Cleanup(func() {
-		// Restore even on an assertion failure before the next recovery experiment.
-		h.annotation(false)
-		patch, err := json.Marshal([]map[string]any{{"op": "test", "path": "/metadata/uid", "value": scaler.Metadata.UID}, {"op": "add", "path": "/metadata/annotations", "value": scaler.Metadata.Annotations}})
-		h.g.Expect(err).NotTo(gomega.HaveOccurred())
-		h.k("-n", "temporal-demo-worker-a", "patch", "scaledobject", "worker-a", "--type=json", "-p", string(patch))
-	})
+	h.registerSnapshotIsolationCleanup(scaler.Metadata.UID, scaler.Metadata.Annotations)
 	h.k("-n", "temporal-demo-worker-a", "annotate", "scaledobject", "worker-a", "autoscaling.keda.sh/paused=true", "--overwrite")
 	key := fmt.Sprintf("task10-snapshot-%d", time.Now().UnixNano())
 	first := h.start(key)

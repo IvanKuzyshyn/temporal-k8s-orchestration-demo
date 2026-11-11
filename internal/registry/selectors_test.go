@@ -23,10 +23,10 @@ func TestIntegrationSelectors(t *testing.T) {
 			}
 			g.Expect(strings.Contains(list, "\nTestDiscoveryPolicy\n")).To(gomega.Equal(strings.Contains(tags, "policies_integration")))
 			combined := strings.Contains(tags, "acceptance_integration") || strings.Contains(tags, "resilience_integration")
-			for _, name := range []string{"TestDiamondFromZero", "TestPlanSnapshotIsolation", "TestHistoryAssertionsSensitivity", "TestAcceptanceDiagnostics"} {
+			for _, name := range []string{"TestDiamondFromZero", "TestPlanSnapshotIsolation", "TestHistoryAssertionsSensitivity", "TestAcceptanceDiagnostics", "TestSnapshotCleanupFailurePaths"} {
 				g.Expect(strings.Contains(list, "\n"+name+"\n")).To(gomega.Equal(combined))
 			}
-			for _, name := range []string{"TestRecoveryWorkerTermination", "TestRecoveryOrchestratorRestart", "TestRecoveryDelayedRetry", "TestRecoveryTemporalConnectivity", "TestTemporalRelayFixture"} {
+			for _, name := range []string{"TestRecoveryWorkerTermination", "TestRecoveryOrchestratorRestart", "TestRecoveryDelayedRetry", "TestRecoveryTemporalConnectivity", "TestTemporalRelayFixture", "TestWorkerRestoreKeepsNativeReplicas"} {
 				g.Expect(strings.Contains(list, "\n"+name+"\n")).To(gomega.Equal(strings.Contains(tags, "resilience_integration")))
 			}
 			for _, name := range []string{"TestLiveRegistry", "TestRegistryRBAC"} {

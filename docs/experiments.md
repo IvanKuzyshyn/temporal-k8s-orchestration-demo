@@ -305,3 +305,43 @@ static-registry baseline, with four generated registrations and policies ready
 for future explicit combined tests. The fresh Pod inventory records one early
 KEDA operator restart; it is currently Ready, and neither provisioning nor smoke
 failed. No further teardown was performed.
+
+## Review fix round 1 — 2026-11-11
+
+Independent review found failure paths not covered by the earlier happy-path
+runs. Per-experiment worker Deployment rollback now restores the Pod template
+and intended metadata with a UID guard, without replacing `/spec` or writing
+KEDA/HPA-owned replicas. Final fixed-replica shell baseline restoration remains
+after scaler removal. Snapshot-isolation rollback uses independent cleanup
+callbacks: restoring the scaler cannot be skipped by a fatal Service/registry
+assertion, and an expired experiment context is not reused for registry cleanup.
+Both callback failures remain visible. ClusterRole/ClusterRoleBinding cleanup
+now uses cluster-scoped arguments; namespaced resources keep their namespace,
+and diagnostic stderr is not suppressed. Pinned policy deprecation is unchanged.
+
+Focused regressions each failed first, then passed: application of the actual
+worker cleanup JSON patch to a Deployment whose native replicas advanced from
+0 to 1; real `testing.T` cleanup/FailNow subprocesses with Service, scaler,
+both-action and registry verification failures plus an expired experiment
+context; and shell cleanup scope/diagnostic propagation. These offline checks
+are included in validation's dedicated build-tag selection; raw RED/GREEN and
+focused race-test output is under `.local/task10/fix-1/`.
+
+Affected public commands were each run once against the unchanged recreated
+cluster, without another reset: smoke exit 0 (216 s including fixture work,
+diamond 145.89 s) and resilience exit 0 (627 s including fixture work,
+five-case Go package 582.709 s). The additional native zero waits in recovery
+remain within existing budgets; no timeout or assertion was relaxed. Proof
+folders are `.local/task10-smoke-rFcrgPfS` and
+`.local/task10-resilience-rcpA2y3S`. All original app/Service ownership metadata,
+new-cluster PVC/Secret/policy identities and completed witness were preserved
+across these ordinary tests. Final checks found Ready fixed apps, no test-owned
+scaler/HPA/discovery RBAC/relay or worktree-owned tunnels, and zero running
+executions. Scope warnings were absent in both restore logs; policy warnings
+remain visible.
+
+No repeated full validation was run for this fix round. The controller's
+separate external 240-second validation interruption has no established final
+exit and is neither a product failure nor a passing run. Prior author validation
+is historical evidence, not validation of the new failure paths. Controller
+re-review and exact-head cumulative Linux CI remain separate pending gates.

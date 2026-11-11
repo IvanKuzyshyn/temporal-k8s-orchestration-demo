@@ -20,6 +20,7 @@ import (
 	"github.com/onsi/gomega"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 )
 
 // snapshotResource restores all changed fields and original ownership metadata
@@ -34,7 +35,15 @@ func (h *acceptanceHarness) snapshotResource(ns, kind, name string) {
 		Spec json.RawMessage
 	}
 	h.g.Expect(json.Unmarshal(b, &obj)).To(gomega.Succeed())
-	patch := []map[string]any{{"op": "test", "path": "/metadata/uid", "value": obj.Metadata.UID}, {"op": "replace", "path": "/spec", "value": obj.Spec}, {"op": "add", "path": "/metadata/annotations", "value": obj.Metadata.Annotations}, {"op": "add", "path": "/metadata/labels", "value": obj.Metadata.Labels}}
+	specPath, specValue := "/spec", obj.Spec
+	if kind == "deployment" && strings.HasPrefix(name, "worker-") {
+		// ScaledObjects/HPAs are still installed between experiments. Only the
+		// Pod template was changed; never write their live replica count back.
+		var spec struct{ Template json.RawMessage }
+		h.g.Expect(json.Unmarshal(obj.Spec, &spec)).To(gomega.Succeed())
+		specPath, specValue = "/spec/template", spec.Template
+	}
+	patch := []map[string]any{{"op": "test", "path": "/metadata/uid", "value": obj.Metadata.UID}, {"op": "replace", "path": specPath, "value": specValue}, {"op": "add", "path": "/metadata/annotations", "value": obj.Metadata.Annotations}, {"op": "add", "path": "/metadata/labels", "value": obj.Metadata.Labels}}
 	p, err := json.Marshal(patch)
 	h.g.Expect(err).NotTo(gomega.HaveOccurred())
 	h.t.Cleanup(func() {
@@ -53,6 +62,67 @@ func (h *acceptanceHarness) snapshotResource(ns, kind, name string) {
 			}
 		}
 	})
+}
+
+func TestWorkerRestoreKeepsNativeReplicas(t *testing.T) {
+	g := gomega.NewWithT(t)
+	dir := t.TempDir()
+	const original = `{"metadata":{"uid":"original-uid","annotations":{"owned":"before"},"labels":{"app":"worker-a"}},"spec":{"replicas":0,"template":{"metadata":{"labels":{"app":"worker-a"}},"spec":{"containers":[{"name":"worker","image":"original","env":[{"name":"ACTIVITY_DURATION","value":"5s"}]}]}}}}`
+	g.Expect(os.WriteFile(filepath.Join(dir, "snapshot.json"), []byte(original), 0600)).To(gomega.Succeed())
+	const kubectl = `#!/usr/bin/env bash
+set -euo pipefail
+if [[ $* == *' get '* ]]; then
+  cat "$RESTORE_FIXTURE/snapshot.json"
+elif [[ $* == *' patch '* ]]; then
+  while (($#)); do
+    if [[ $1 == -p ]]; then printf '%s' "$2" > "$RESTORE_FIXTURE/patch.json"; break; fi
+    shift
+  done
+elif [[ $* == *' rollout status '* ]]; then
+  echo rollout >> "$RESTORE_FIXTURE/calls"
+else exit 99
+fi
+`
+	g.Expect(os.WriteFile(filepath.Join(dir, "kubectl"), []byte(kubectl), 0755)).To(gomega.Succeed())
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("RESTORE_FIXTURE", dir)
+	t.Run("actual cleanup callback", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		h := &acceptanceHarness{harness: &harness{t: t, g: gomega.NewWithT(t), root: dir}, ctx: ctx}
+		h.snapshotResource("temporal-demo-worker-a", "deployment", "worker-a")
+	})
+	patchBytes, err := os.ReadFile(filepath.Join(dir, "patch.json"))
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	patch, err := jsonpatch.DecodePatch(patchBytes)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	// KEDA advanced replicas after the snapshot. Apply the actual cleanup patch,
+	// rather than just inspecting its source or asserting a mock call happened.
+	var live map[string]any
+	g.Expect(json.Unmarshal([]byte(original), &live)).To(gomega.Succeed())
+	live["spec"].(map[string]any)["replicas"] = float64(1)
+	live["spec"].(map[string]any)["template"] = map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"image": "changed"}}}}
+	b, err := json.Marshal(live)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	restored, err := patch.Apply(b)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	var got, before map[string]any
+	g.Expect(json.Unmarshal(restored, &got)).To(gomega.Succeed())
+	g.Expect(json.Unmarshal([]byte(original), &before)).To(gomega.Succeed())
+	spec := got["spec"].(map[string]any)
+	g.Expect(spec["replicas"]).To(gomega.Equal(float64(1)), "cleanup must not overwrite native KEDA/HPA replicas")
+	g.Expect(spec["template"]).To(gomega.Equal(before["spec"].(map[string]any)["template"]))
+	g.Expect(got["metadata"]).To(gomega.Equal(before["metadata"]))
+	live["metadata"].(map[string]any)["uid"] = "replacement-uid"
+	b, err = json.Marshal(live)
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	_, err = patch.Apply(b)
+	g.Expect(err).To(gomega.HaveOccurred(), "UID guard must refuse replacement Deployment")
+	var ops []struct{ Path string }
+	g.Expect(json.Unmarshal(patchBytes, &ops)).To(gomega.Succeed())
+	for _, op := range ops {
+		g.Expect(op.Path).NotTo(gomega.BeElementOf("/spec", "/spec/replicas"), "no controller-owned replica mutation in worker restore")
+	}
 }
 
 func (h *acceptanceHarness) runningActivity(parent string) client.WorkflowRun {

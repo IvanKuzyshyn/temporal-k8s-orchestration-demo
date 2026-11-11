@@ -51,18 +51,24 @@ stop_forwards() {
 
 delete_created() {
   local phase=$1 kind ns name uid current failed=0
+  local -a args
   # Exact UID checks accompany every deletion; no adoption by expected name.
   if [[ -f $proof/created.tsv ]]; then
     while read -r kind ns name uid; do
       if [[ $phase == scalers && $kind != ScaledObject || $phase == access && $kind == ScaledObject ]]; then continue; fi
-      current=$(k -n "$ns" get "$kind" "$name" --ignore-not-found -o jsonpath='{.metadata.uid}') || { failed=1; continue; }
+      args=("$kind" "$name")
+      case "$kind" in
+        ClusterRole|ClusterRoleBinding) ;;
+        *) args+=(-n "$ns") ;;
+      esac
+      current=$(k get "${args[@]}" --ignore-not-found -o jsonpath='{.metadata.uid}') || { failed=1; continue; }
       [[ -n $current ]] || continue
       if [[ $current != "$uid" ]]; then
         echo "Refusing changed UID: $kind $ns/$name" >&2
         failed=1
         continue
       fi
-      k -n "$ns" delete "$kind" "$name" --wait=true --timeout=60s || failed=1
+      k delete "${args[@]}" --wait=true --timeout=60s || failed=1
     done <"$proof/created.tsv"
   fi
   return "$failed"

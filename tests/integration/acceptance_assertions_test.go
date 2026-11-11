@@ -7,8 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,6 +98,110 @@ func TestHistoryAssertionsSensitivity(t *testing.T) {
 	child[1].GetActivityTaskScheduledEventAttributes().Input = payload(map[string]any{"workerName": "worker-a", "business": true})
 	g.Expect(checkChild(child, "worker-a")).NotTo(gomega.Succeed())
 	g.Expect(exactPayload(payload(map[string]any{"results": identityResult().Results, "business": true}), identityResult())).NotTo(gomega.Succeed())
+}
+
+func TestSnapshotCleanupFailurePaths(t *testing.T) {
+	// A subprocess exercises actual testing.T cleanup/FailNow semantics while
+	// allowing the parent to verify truthful failures and subsequent actions.
+	if os.Getenv("TASK10_SNAPSHOT_CLEANUP_CHILD") != "" {
+		t.Setenv("ACCEPTANCE_PROOF", os.Getenv("CLEANUP_DIR"))
+		root, err := filepath.Abs("../..")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		h := &acceptanceHarness{harness: &harness{t: t, g: gomega.NewWithT(t), root: root}, ctx: ctx, endpoint: os.Getenv("CLEANUP_URL")}
+		h.registerSnapshotIsolationCleanup("scaler-uid", map[string]string{"owned": "before"})
+		return
+	}
+	for _, scenario := range []string{"success", "service_failure", "scaler_failure", "both_failures", "registry_failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+			dir := t.TempDir()
+			service := `{"metadata":{"uid":"service-uid","annotations":{"temporal-worker-run-after":"worker-a"}}}`
+			g.Expect(os.WriteFile(filepath.Join(dir, "service-worker-b.json"), []byte(service), 0600)).To(gomega.Succeed())
+			var items []any
+			for _, name := range diamondNames {
+				items = append(items, map[string]any{"metadata": map[string]string{"name": "temporal-worker-" + name, "namespace": "temporal-demo-" + name}, "data": map[string]string{"workerName": name}})
+			}
+			b, err := json.Marshal(map[string]any{"items": items})
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(os.WriteFile(filepath.Join(dir, "registrations.json"), b, 0600)).To(gomega.Succeed())
+			const kubectl = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$CLEANUP_DIR/calls"
+if [[ $* == *' get service worker-b '* ]]; then
+  printf service-uid
+elif [[ $* == *' annotate service worker-b '* || $* == *' patch service worker-b '* ]]; then
+  if [[ $TASK10_SNAPSHOT_CLEANUP_CHILD == service_failure || $TASK10_SNAPSHOT_CLEANUP_CHILD == both_failures ]]; then
+    echo service-restore-denied >&2; exit 42
+  fi
+elif [[ $* == *' patch scaledobject worker-a '* ]]; then
+  while (($#)); do
+    if [[ $1 == -p ]]; then printf '%s' "$2" > "$CLEANUP_DIR/scaler-patch.json"; break; fi
+    shift
+  done
+  if [[ $TASK10_SNAPSHOT_CLEANUP_CHILD == scaler_failure || $TASK10_SNAPSHOT_CLEANUP_CHILD == both_failures ]]; then
+    echo scaler-restore-denied >&2; exit 43
+  fi
+elif [[ $* == *' get configmaps '* ]]; then
+  if [[ $TASK10_SNAPSHOT_CLEANUP_CHILD == registry_failure ]]; then echo registry-list-denied >&2; exit 44; fi
+  cat "$CLEANUP_DIR/registrations.json"
+else echo "unexpected command: $*" >&2; exit 99
+fi
+`
+			g.Expect(os.WriteFile(filepath.Join(dir, "kubectl"), []byte(kubectl), 0755)).To(gomega.Succeed())
+			reg, err := registry.LoadStatic("../../deploy/config/workers.json")
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				_ = json.NewEncoder(w).Encode(reg.Snapshot())
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSnapshotCleanupFailurePaths$", "-test.v")
+			cmd.Env = append(os.Environ(), "TASK10_SNAPSHOT_CLEANUP_CHILD="+scenario, "CLEANUP_DIR="+dir, "CLEANUP_URL="+server.URL, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			t.Logf("cleanup subprocess %s (failure exits are expected only for injected boundary errors):\n%s", scenario, out)
+			if scenario == "success" {
+				g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
+			} else {
+				g.Expect(err).To(gomega.HaveOccurred())
+				g.Expect(cmd.ProcessState.ExitCode()).To(gomega.Equal(1), string(out))
+			}
+			calls, readErr := os.ReadFile(filepath.Join(dir, "calls"))
+			g.Expect(readErr).NotTo(gomega.HaveOccurred())
+			g.Expect(string(calls)).To(gomega.ContainSubstring("service worker-b"), "service rollback must always be attempted")
+			g.Expect(string(calls)).To(gomega.ContainSubstring("patch scaledobject worker-a"), "independent scaler rollback was skipped")
+			patchBytes, err := os.ReadFile(filepath.Join(dir, "scaler-patch.json"))
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			var patch []struct {
+				Op, Path string
+				Value    any
+			}
+			g.Expect(json.Unmarshal(patchBytes, &patch)).To(gomega.Succeed())
+			g.Expect(patch).To(gomega.HaveLen(2))
+			g.Expect(patch[0].Op).To(gomega.Equal("test"))
+			g.Expect(patch[0].Path).To(gomega.Equal("/metadata/uid"))
+			g.Expect(patch[0].Value).To(gomega.Equal("scaler-uid"))
+			g.Expect(patch[1].Value).To(gomega.Equal(map[string]any{"owned": "before"}))
+			if scenario == "service_failure" || scenario == "both_failures" {
+				g.Expect(string(out)).To(gomega.ContainSubstring("service-restore-denied"))
+			}
+			if scenario == "scaler_failure" || scenario == "both_failures" {
+				g.Expect(string(out)).To(gomega.ContainSubstring("scaler-restore-denied"))
+			}
+			if scenario == "registry_failure" {
+				g.Expect(string(out)).To(gomega.ContainSubstring("registry-list-denied"))
+			}
+			if !strings.Contains(scenario, "service") && scenario != "both_failures" {
+				g.Expect(requests.Load()).To(gomega.BeNumerically(">", 0), "registry verification must use a fresh context, not expired experiment context")
+			}
+		})
+	}
 }
 
 func TestAcceptanceDiagnostics(t *testing.T) {

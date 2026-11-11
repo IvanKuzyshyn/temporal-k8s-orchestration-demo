@@ -29,7 +29,7 @@ if [ -n "$files" ]; then
 fi
 go test -race ./...
 go vet ./...
-go test -race -count=1 -tags=integration,resilience_integration -run '^Test(HistoryAssertionsSensitivity|ActivityPodSelection)$' ./tests/integration
+go test -race -count=1 -tags=integration,resilience_integration -run '^Test(HistoryAssertionsSensitivity|ActivityPodSelection|WorkerRestoreKeepsNativeReplicas|SnapshotCleanupFailurePaths)$' ./tests/integration
 for script in scripts/*.sh; do
   bash -n "$script"
 done

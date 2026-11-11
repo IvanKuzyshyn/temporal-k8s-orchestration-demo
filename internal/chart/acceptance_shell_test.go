@@ -140,6 +140,41 @@ k() {
 	}
 }
 
+func TestAcceptanceCleanupScope(t *testing.T) {
+	g := gomega.NewWithT(t)
+	b, err := os.ReadFile("../../scripts/smoke.sh")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	text := string(b)
+	start := strings.Index(text, "delete_created() {")
+	end := strings.Index(text[start:], "\n}\n")
+	dir := t.TempDir()
+	g.Expect(os.WriteFile(filepath.Join(dir, "created.tsv"), []byte("ClusterRole default registry uid\nClusterRoleBinding default registry uid\nServiceAccount temporal-demo-orchestrator orchestrator uid\n"), 0600)).To(gomega.Succeed())
+	script := `set -euo pipefail
+proof=$1
+k() {
+  printf '%s\n' "$*" >> "$proof/calls"
+  if [[ $* == *'jsonpath={.metadata.uid}'* ]]; then printf uid
+  elif [[ $* == *delete* ]]; then
+    echo retained-delete-diagnostic >&2
+    if [[ $* == *ClusterRole* && $* == *' -n '* ]]; then echo incorrect-cluster-scope >&2; return 42; fi
+    if [[ $* == *ServiceAccount* && $* != *'-n temporal-demo-orchestrator'* ]]; then echo missing-namespace >&2; return 43; fi
+  else exit 99
+  fi
+}
+` + text[start:start+end+3] + "\ndelete_created access\n"
+	cmd := exec.Command("/bin/bash", "-c", script, "test", dir)
+	out, err := cmd.CombinedOutput()
+	g.Expect(err).NotTo(gomega.HaveOccurred(), string(out))
+	g.Expect(strings.Count(string(out), "retained-delete-diagnostic")).To(gomega.Equal(3), "diagnostic stderr must remain visible")
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	for _, line := range strings.Split(string(calls), "\n") {
+		if strings.Contains(line, "ClusterRole") {
+			g.Expect(line).NotTo(gomega.ContainSubstring("-n "))
+		}
+	}
+}
+
 func TestAcceptanceEmptyForwardCleanup(t *testing.T) {
 	g := gomega.NewWithT(t)
 	b, err := os.ReadFile("../../scripts/smoke.sh")
