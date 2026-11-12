@@ -6,7 +6,7 @@ for component in admission background reports cleanup; do
   k -n kyverno rollout status "deployment/kyverno-$component-controller" --timeout=90s
 done
 # Refuse collisions before any mutation. Never touch unrelated admission policy.
-for resource in clusterpolicy/temporal-validate-workers clusterpolicy/temporal-generate-registrations clusterrole/temporal-worker-service-reader; do
+for resource in validatingpolicy.policies.kyverno.io/temporal-validate-workers generatingpolicy.policies.kyverno.io/temporal-generate-registrations clusterrole/temporal-worker-service-reader; do
   existing=$(k get "$resource" --ignore-not-found -o json)
   if [[ -n $existing ]] && ! jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "temporal-worker-discovery"' <<<"$existing" >/dev/null; then
     echo "Refusing foreign $resource" >&2
@@ -37,4 +37,4 @@ for file in validate-workers generate-registrations; do
   k apply --dry-run=server --validate=strict -f "k8s/policies/$file.yaml"
   k apply -f "k8s/policies/$file.yaml"
 done
-k wait --for=condition=Ready clusterpolicy/temporal-validate-workers clusterpolicy/temporal-generate-registrations --timeout=90s
+k wait --for='jsonpath={.status.conditionStatus.ready}=true' validatingpolicy.policies.kyverno.io/temporal-validate-workers generatingpolicy.policies.kyverno.io/temporal-generate-registrations --timeout=90s
