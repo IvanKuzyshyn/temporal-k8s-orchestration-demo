@@ -46,6 +46,22 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 			}
 			identity := r.Kind + "/" + r.Metadata.Name
 			identities[identity] = true
+			if r.Kind == "CustomResourceDefinition" && (r.Metadata.Name == "validatingpolicies.policies.kyverno.io" || r.Metadata.Name == "generatingpolicies.policies.kyverno.io") {
+				var crd struct {
+					Spec struct {
+						Versions []struct {
+							Name   string
+							Served bool
+						}
+					}
+				}
+				g.Expect(node.Decode(&crd)).To(gomega.Succeed())
+				served := false
+				for _, version := range crd.Spec.Versions {
+					served = served || (version.Name == "v1" && version.Served)
+				}
+				g.Expect(served).To(gomega.BeTrue(), identity+" must serve the CEL policy API")
+			}
 			phase := "controller"
 			if r.Kind == "Namespace" {
 				phase = "namespace"
@@ -87,7 +103,7 @@ func TestInfrastructureAndBlockYAML(t *testing.T) {
 		required := map[string][]string{
 			"temporal": {"Namespace/temporal", "StatefulSet/postgres", "Job/temporal-schema", "Job/temporal-namespace", "Deployment/temporal", "Deployment/temporal-ui"},
 			"keda":     {"Namespace/keda", "CustomResourceDefinition/scaledobjects.keda.sh", "Deployment/keda-operator", "Deployment/keda-operator-metrics-apiserver", "Deployment/keda-admission-webhooks"},
-			"kyverno":  {"Namespace/kyverno", "CustomResourceDefinition/clusterpolicies.kyverno.io", "Deployment/kyverno-admission-controller", "Deployment/kyverno-background-controller", "Deployment/kyverno-cleanup-controller", "Deployment/kyverno-reports-controller"},
+			"kyverno":  {"Namespace/kyverno", "CustomResourceDefinition/clusterpolicies.kyverno.io", "CustomResourceDefinition/validatingpolicies.policies.kyverno.io", "CustomResourceDefinition/generatingpolicies.policies.kyverno.io", "Deployment/kyverno-admission-controller", "Deployment/kyverno-background-controller", "Deployment/kyverno-cleanup-controller", "Deployment/kyverno-reports-controller"},
 		}
 		if file == "keda" {
 			g.Expect(identities).To(gomega.HaveLen(30), "complete chart resources plus Namespace")
