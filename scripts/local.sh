@@ -149,7 +149,7 @@ for deployment in temporal temporal-ui; do
   k -n temporal rollout status "deployment/$deployment" --timeout=180s
 done
 k -n temporal-demo-orchestrator rollout status deployment/orchestrator --timeout=180s
-k wait --for=condition=Ready clusterpolicy/temporal-validate-workers clusterpolicy/temporal-generate-registrations --timeout=120s
+k wait --for='jsonpath={.status.conditionStatus.ready}=true' validatingpolicy.policies.kyverno.io/temporal-validate-workers generatingpolicy.policies.kyverno.io/temporal-generate-registrations --timeout=120s
 for worker in worker-a worker-b worker-c worker-d; do
   k -n "temporal-demo-$worker" wait --for=condition=Ready "scaledobject/$worker" --timeout=180s
 done

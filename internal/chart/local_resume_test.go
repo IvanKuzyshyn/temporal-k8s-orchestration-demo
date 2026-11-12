@@ -123,6 +123,10 @@ else echo ok; fi
 				t.Fatalf("down: %v %s", err, out)
 			}
 			calls, _ := os.ReadFile(filepath.Join(root, "calls"))
+			wait := "wait --for=jsonpath={.status.conditionStatus.ready}=true " + validatingWorkerPolicy + " " + generatingWorkerPolicy + " --timeout=120s"
+			if strings.Count(string(calls), wait) != 2 || strings.Contains(string(calls), "clusterpolicy/") {
+				t.Fatalf("resume must wait for both CEL policies each time: %s", calls)
+			}
 			if !strings.Contains(string(calls), "docker start owned-id") {
 				t.Fatal("did not resume stopped node")
 			}
