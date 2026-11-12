@@ -1,5 +1,9 @@
 # Simple Local Lifecycle Implementation Plan
 
+> Historical implementation record. The ownership model is retained; the minimal
+> demo supersedes `/workers`/hash readiness and bootstrap mode selection. Follow
+> the current root README for supported commands.
+
 **Goal:** Provide `mise run up`, `down`, and `destroy` for the full discovery/scaling demo.
 
 **Approved design:** `up` creates or resumes the dedicated kind cluster and prints ready localhost API/UI endpoints. Workers use Kyverno discovery and KEDA scale-to-zero. `down` stops managed tunnels and the verified node container, retaining all history. `destroy` removes only the owned cluster and lifecycle state. Docker must already be running. Shutdown interrupts active work; elapsed Temporal deadlines still matter.

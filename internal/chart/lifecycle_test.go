@@ -32,7 +32,7 @@ func TestUpRerunAndBootstrapOrdering(t *testing.T) {
 				for _, dir := range []string{"scripts", "tools", ".local"} {
 					g.Expect(os.MkdirAll(filepath.Join(root, dir), 0700)).To(gomega.Succeed())
 				}
-				for _, path := range []string{"scripts/k8s-up.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq", "scripts/policies-install.sh", "scripts/expected-workers.jq"} {
+				for _, path := range []string{"scripts/k8s-up.sh", "scripts/local-output.sh", "scripts/render-controller.sh", "scripts/kind-common.sh", "scripts/validate-k8s.sh", "scripts/kind-diagnostics.sh", "scripts/webhooks-ready.jq", "scripts/policies-install.sh", "scripts/expected-workers.jq"} {
 					b, err := os.ReadFile("../../" + path)
 					g.Expect(err).NotTo(gomega.HaveOccurred(), "direct rerunnable up entrypoint")
 					g.Expect(os.WriteFile(filepath.Join(root, path), b, 0600)).To(gomega.Succeed())

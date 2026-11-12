@@ -25,7 +25,7 @@ func TestLocalResumeTunnels(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"local.sh", "kind-common.sh", "wait-graph.sh"} {
+			for _, name := range []string{"local.sh", "local-output.sh", "kind-common.sh", "wait-graph.sh"} {
 				b, err := os.ReadFile("../../scripts/" + name)
 				if err != nil {
 					t.Fatal(err)
@@ -54,8 +54,9 @@ exec "$@"
 			write("tools/kubectl", `#!/usr/bin/env bash
 set -eu
 echo "kubectl $*" >> "$STATE/calls"
+[[ $* == *'config current-context'* ]] || echo routine-kubectl-output
 if [[ $* == *port-forward* ]]; then
- [[ $SCENARIO != occupied ]] || exit 1
+ [[ $SCENARIO != occupied ]] || { echo 'bind: address already in use' >&2; exit 1; }
  echo "Forwarding from 127.0.0.1:18080 -> 8080"
  trap 'exit 0' TERM
  while true; do sleep 0.1; done
@@ -86,13 +87,31 @@ else echo ok; fi
 			})
 			out, err := run("up")
 			if scenario == "occupied" {
-				if err == nil || strings.Contains(out, "Temporal UI:") {
+				if err == nil || strings.Contains(out, "Temporal UI:") || !strings.Contains(out, "bind: address already in use") || !strings.Contains(out, "Startup failed") {
 					t.Fatalf("false success: %v %s", err, out)
+				}
+				if strings.Contains(out, "Opening localhost API/UI tunnels… ✅") {
+					t.Fatalf("failed phase marked successful: %s", out)
 				}
 				return
 			}
-			if err != nil || !strings.Contains(out, "Temporal UI: http://127.0.0.1:18088") {
+			if err != nil || !strings.Contains(out, "Temporal UI: 🖥️\nhttp://127.0.0.1:18088") {
 				t.Fatalf("up: %v %s", err, out)
+			}
+			if strings.Contains(out, "\x1b[") {
+				t.Fatalf("unexpected ANSI styling: %q", out)
+			}
+			for _, phase := range []string{"Checking local cluster ownership…", "Resuming the local Kubernetes cluster…", "Waiting for Kubernetes readiness…", "Waiting for Temporal, discovery and worker scalers…", "Opening localhost API/UI tunnels…", "Waiting for API/UI readiness…", "Waiting for the complete worker graph (up to 120 seconds)…"} {
+				if !strings.Contains(out, phase+" ✅") {
+					t.Fatalf("missing completion for %s: %s", phase, out)
+				}
+			}
+			if strings.Contains(out, "routine-kubectl-output") {
+				t.Fatalf("routine logs leaked: %s", out)
+			}
+			saved, readErr := os.ReadFile(filepath.Join(root, ".local/lifecycle/up.log"))
+			if readErr != nil || !strings.Contains(string(saved), "routine-kubectl-output") {
+				t.Fatalf("missing saved logs: %v %s", readErr, saved)
 			}
 			// Repeat up must stop exactly its previous tunnels, not fail on a nohup PID.
 			out, err = run("up")

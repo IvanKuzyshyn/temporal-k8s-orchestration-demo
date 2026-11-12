@@ -72,7 +72,7 @@ func TestDemoGraphProjection(t *testing.T) {
 }
 
 func TestGraphWaitDeadline(t *testing.T) {
-	for _, scenario := range []string{"ready", "transient", "partial", "wrong", "timeout", "slow", "missing"} {
+	for _, scenario := range []string{"ready", "transient", "invalid", "connection", "partial", "extra", "wrong", "timeout", "slow", "late", "missing", "malformed"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			tools := filepath.Join(root, "tools")
@@ -88,6 +88,9 @@ func TestGraphWaitDeadline(t *testing.T) {
 			expected := `[{"name":"worker-a","taskQueue":"worker-a.v1.temporal","workflowType":"ExampleChildWorkflow","dependencies":[]}]`
 			if scenario != "missing" {
 				write("expected.json", expected)
+			}
+			if scenario == "malformed" {
+				write("expected.json", "{")
 			}
 			write("clock", "0\n")
 			write("count", "0\n")
@@ -106,26 +109,36 @@ echo "request $now $limit" >> "$STATE/calls"
 ((now < 120 && limit <= 2 && limit <= 120-now)) || exit 99
 if [[ $SCENARIO == slow ]]; then echo $((now+limit)) > "$STATE/clock"; echo 'connection failed' >&2; exit 28; fi
 if [[ $SCENARIO == timeout || ($SCENARIO == transient && $n == 0) ]]; then echo '{"synced":false,"valid":false,"problems":["registration unavailable"],"plan":{"nodes":[]}}' > "$file"; printf 503; exit; fi
+if [[ $SCENARIO == connection && $n == 0 ]]; then echo 'connection refused' >&2; exit 7; fi
+if [[ $SCENARIO == invalid && $n == 0 ]]; then echo '{"synced":true,"valid":false,"problems":["cycle"],"plan":{"nodes":[]}}' > "$file"; printf 422; exit; fi
+if [[ $SCENARIO == extra && $n == 0 ]]; then jq -n --slurpfile nodes "$STATE/expected.json" '{synced:true,valid:true,problems:[],plan:{nodes:($nodes[0]+[($nodes[0][0] | .name="unexpected")])}}' > "$file"; printf 200; exit; fi
 if [[ $SCENARIO == partial && $n == 0 ]]; then echo '{"synced":true,"valid":true,"problems":[],"plan":{"nodes":[]}}' > "$file"; printf 200; exit; fi
-if [[ $SCENARIO == wrong && $n == 0 ]]; then echo '{"synced":true,"valid":true,"problems":[],"plan":{"nodes":[{"name":"worker-a","dependencies":["other"]}]}}' > "$file"; printf 200; exit; fi
+if [[ $SCENARIO == wrong && $n == 0 ]]; then jq -n --slurpfile nodes "$STATE/expected.json" '{synced:true,valid:true,problems:[],plan:{nodes:($nodes[0] | map(.dependencies=["other"]))}}' > "$file"; printf 200; exit; fi
+if [[ $SCENARIO == late ]]; then echo 121 > "$STATE/clock"; fi
 jq -n --slurpfile nodes "$STATE/expected.json" '{synced:true,valid:true,problems:[],plan:{nodes:$nodes[0]}}' > "$file"; printf 200
 `)
 			cmd := exec.Command("bash", "../../scripts/wait-graph.sh", "http://fixture", filepath.Join(root, "expected.json"))
 			cmd.Env = append(os.Environ(), "STATE="+root, "SCENARIO="+scenario, "PATH="+tools+":"+os.Getenv("PATH"))
 			out, err := cmd.CombinedOutput()
-			failure := scenario == "timeout" || scenario == "slow" || scenario == "missing"
+			failure := scenario == "timeout" || scenario == "slow" || scenario == "late" || scenario == "missing" || scenario == "malformed"
 			if (err != nil) != failure {
 				t.Fatalf("%v: %s", err, out)
 			}
 			calls, _ := os.ReadFile(filepath.Join(root, "calls"))
 			clock, _ := os.ReadFile(filepath.Join(root, "clock"))
+			if (scenario == "missing" || scenario == "malformed") && (len(calls) != 0 || !strings.Contains(string(out), "repair bootstrap state")) {
+				t.Fatalf("bad expectation did not fail before polling: %s %s", calls, out)
+			}
 			if scenario == "ready" && string(calls) != "request 0 2\n" {
 				t.Fatalf("not immediate: %s", calls)
 			}
-			if scenario == "partial" || scenario == "wrong" || scenario == "transient" {
+			if scenario == "partial" || scenario == "wrong" || scenario == "transient" || scenario == "invalid" || scenario == "connection" || scenario == "extra" {
 				if !strings.Contains(string(calls), "sleep 1\nrequest 1 2") {
 					t.Fatalf("did not retry: %s", calls)
 				}
+			}
+			if scenario == "slow" && !strings.Contains(string(out), "curl exit: 28") {
+				t.Fatalf("missing connection outcome: %s", out)
 			}
 			if scenario == "timeout" || scenario == "slow" {
 				if string(clock) != "120\n" {

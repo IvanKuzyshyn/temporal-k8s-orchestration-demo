@@ -1,91 +1,114 @@
-# Orchestrator HTTP API
+# HTTP API
 
-The running chi API and Temporal parent poller share the orchestrator process.
-Compose publishes `http://127.0.0.1:8080`; kind uses `mise run api:forward`
-at `http://127.0.0.1:18080`. See the [quick starts](../README.md). All endpoints
-are local-only and unauthenticated; no public ingress is configured.
+`mise run up` exposes the unauthenticated, localhost-only API at
+`http://127.0.0.1:18080` and Temporal UI at `http://127.0.0.1:18088`.
+No public ingress is configured. Keep tunnels bound to localhost.
 
-## Start a run
+## POST /runs
 
 ```sh
-curl -i -X POST http://127.0.0.1:8080/runs \
-  -H 'Idempotency-Key: key'
+curl -fsS -X POST http://127.0.0.1:18080/runs
+# Optional retry-safe key:
+curl -fsS -X POST -H 'Idempotency-Key: my-run' http://127.0.0.1:18080/runs
 ```
 
-Send no request body (zero bytes). No `Content-Type` header is required and no JSON request is decoded. Any body byte, including whitespace or `{}`, is rejected with a safe **400**; the handler probes at most one byte even for unknown-length/chunked requests. Read errors also return **400**. No request/business data is propagated through parent, child, activity inputs or results.
+Send zero body bytes. `{}`, whitespace, unknown-length/chunked body bytes and body
+read errors return 400. No Content-Type is needed. The handler probes at most one
+byte rather than buffering unexpected input.
 
-`Idempotency-Key` is optional. If supplied it must have exactly one value of 1–128 printable ASCII characters (bytes 0x20–0x7e); present-but-empty is invalid. Application-visible spaces are significant, never trimmed by the handler. HTTP transports may normalize surrounding header whitespace before handing it to the application. Keys are opaque and are never included in application logs or response errors. Without a key, every request receives a cryptographically random workflow ID.
+A successful response is HTTP 202 with `workflowId`, `runId`, `planHash`, and
+`status` (normally `running` for a new run). No business data is accepted or passed
+to workflows. New starts require synchronized, nonempty, valid discovery. Each
+start validates and copies the current plan; later registration changes cannot
+mutate an existing workflow's input.
 
-Example HTTP **202** response for the checked-in diamond registry (the run ID below is illustrative and allocated by Temporal):
+### Idempotency
+
+An optional Idempotency-Key must have exactly one value, 1–128 printable ASCII
+bytes (0x20–0x7e). Present-but-empty is invalid. Application-visible spaces are
+significant; HTTP transports can normalize surrounding header whitespace.
+
+Keyed IDs are `run-` plus lowercase SHA-256 of the key bytes. Unkeyed requests get
+cryptographically random IDs. Temporal is the source of truth, not an in-memory
+map: duplicate workflow IDs are rejected and lookup/start races resolve against
+the durable execution. Memo retains the original canonical `planHash`.
+
+The same key returns 202 with the original workflow/run/hash and current status
+or result, including after completion, process restart, stop/resume or registry
+changes. Existing keyed runs are looked up **before** graph validation; graph
+422/503 does not by itself block replay. New keys select the current valid plan.
+Missing/corrupt durable metadata is an error, never fabricated successful replay.
+
+A request has a two-second operation budget, shortened by its request deadline.
+503 or a lost response can happen **after Temporal accepted the workflow**.
+Retry the same key; an unkeyed retry can create extra work. Keys are not logged or
+included in error text. Deduplication lasts only within retained Temporal history
+(configured retention 72 hours); destroying storage destroys that history.
+
+## GET /runs/{workflowID}
+
+```sh
+workflow_id='paste-workflowId-here'
+curl -fsS "http://127.0.0.1:18080/runs/$workflow_id"
+```
+
+Returns 200 with workflowId, runId, planHash and status. Statuses: `running`,
+`completed`, `failed`, `canceled`, `terminated`, `timedout`. Retrieval does not wait
+for a running workflow. Completed results are pinned to the described run ID,
+with following of later runs disabled. A completed diamond result is:
 
 ```json
-{"workflowId":"run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683","runId":"5e6b7b18-cc5b-4d20-b86e-88af2b1b29d4","planHash":"5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62","status":"running"}
+{"results":[{"workerName":"worker-a"},{"workerName":"worker-b"},{"workerName":"worker-c"},{"workerName":"worker-d"}]}
 ```
 
-### Durable idempotency
+Non-success terminal states include a safe failure summary, not exception causes
+or payloads. Unknown/expired execution: 404 `{"error":"run not found"}`.
 
-A keyed workflow ID is `run-` followed by the lowercase SHA-256 hex digest of the key bytes. Temporal is the source of truth, not an in-memory map. The gateway uses SDK reject-duplicate workflow ID reuse, conflict-fail semantics, and explicit already-started errors. Concurrent lookup/start races are resolved by describing the durable execution after an already-started error.
-
-At creation, Temporal Memo stores `planHash`, the shared canonical execution-plan hash. The hash and execution identifiers are decoded and validated on durable reads; missing/corrupt metadata is an internal error, not a successful repeat. There is no request hash or input-conflict comparison; unrelated extra Memo fields are ignored.
-
-A retry with the same key returns **202**, the **original** workflow ID/run ID/plan hash, and the current status/result if available, even after completion, orchestrator restart or registry changes. Existing keyed runs are looked up **before** validating the current registry, so a currently invalid or unsynchronized graph does not prevent their resolution. A registry change never conflicts with or rebinds that key. A new key selects the current validated plan.
-
-New starts require a synchronized, nonempty, valid registry. The service copies the plan, rebuilds/validates execution identities, queues, workflow types, dependencies and cycles through the shared graph builder, and verifies the canonical plan/hash before starting. It never changes provider data. Parent execution starts use `ParentWorkflow`, queue `orchestrator.v1.temporal`, a 30-minute execution timeout, immutable input and **no workflow retry policy**.
-
-Deduplication lasts only while Temporal retains the execution history. Once retention expires or history is explicitly deleted, the key can create a new execution. There is no separate application idempotency database: durable metadata lives in
-Temporal's PostgreSQL-backed persistence. `compose:persistence` and
-`test:kind-persistence` verify replacement/schema-rerun preservation separately
-from handler unit tests. Explicit volume/PVC/cluster reset destroys that history.
-
-Start and status operations have a **two-second context budget**, shortened by
-the request deadline. A failed lookup or ambiguous start timeout returns **503**,
-never invented acceptance. A timeout or lost HTTP response can occur **after
-Temporal accepted** the workflow. Retry with the **same key** to discover the
-durable execution; an unkeyed retry may start additional work. A 503 is not proof
-of absence. Acceptance tests persist exact key-derived start intent before POST
-and reconcile ambiguous ownership directly with Temporal before scoped cleanup.
-
-## Inspect a run
+## GET /graph
 
 ```sh
-curl http://127.0.0.1:8080/runs/run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683
+curl -fsS http://127.0.0.1:18080/graph
+# To inspect diagnostics even when validation fails:
+curl -sS http://127.0.0.1:18080/graph | jq
 ```
 
-HTTP **200** includes `workflowId`, `runId`, `planHash` and `status`. Status values are `running`, `completed`, `failed`, `canceled`, `terminated`, and `timedout`. Retrieval never waits for an unfinished workflow to finish. A completed run retrieves the result for the **described run ID**, with SDK following of later runs disabled. A completed example:
+Read-only validation of one current registry snapshot, without Temporal calls,
+workflow creation or registration edits. Response fields:
 
-```json
-{"workflowId":"run-2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683","runId":"5e6b7b18-cc5b-4d20-b86e-88af2b1b29d4","planHash":"5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62","status":"completed","result":{"results":[{"workerName":"worker-a"},{"workerName":"worker-b"},{"workerName":"worker-c"},{"workerName":"worker-d"}]}}
-```
+- `synced`: whether discovery has synchronized.
+- `valid`: whether the snapshot is nonempty, valid and canonical.
+- `plan`: schemaVersion, canonical nodes and hash. Each node includes name,
+  taskQueue, workflowType and dependencies (roots serialize dependencies as null).
+- `problems`: diagnostics array, empty on success.
 
-Terminal non-success states include a safe `failure` summary such as `"Workflow failed"`, not internal exception causes, stack traces or payloads. An unknown/expired workflow returns **404** with `{"error":"run not found"}`.
+HTTP statuses: **200** synchronized/valid; **422** synchronized but invalid or
+empty; **503** unsynchronized (takes precedence over invalidity). `/workers` has
+been removed, with no compatibility alias.
 
-## Diagnostics and health
+`up` polls this endpoint every second for up to 120 elapsed seconds after earlier
+infrastructure/API readiness. It also compares the full expected node set and
+dependencies derived from the installed deployment, because a valid partial graph
+is not complete startup. Requests are nonoverlapping, capped at two seconds and
+the remaining deadline. Startup expectations never become execution inputs.
+POST always reads its own current snapshot; a previous GET is not required and
+cannot reserve or freeze a graph version.
 
-- `GET /workers` always returns **200** with the provider snapshot: `synced`, `plan` (including `schemaVersion`, canonical `nodes`, and `hash`), and `problems`. Invalid/unsynchronized snapshots remain visible for diagnosis; they do not become runnable.
-- `GET /healthz` returns **200** and `{"status":"ok"}` for process liveness, independent of registry or Temporal availability.
-- `GET /readyz` requires initialized registry synchronization and successful supplied Temporal connectivity checking under a **2-second context deadline**, or a shorter request deadline. The supplied callback must honor context cancellation. Graph validity is deliberately not a readiness condition. Success is **200** with `{"status":"ready"}`; failure is **503** with `{"error":"not ready"}`. A missing ready function is not ready.
+## Health
 
-## Error responses
+- `GET /healthz`: process liveness, independent of registry/Temporal availability.
+- `GET /readyz`: discovery synchronized, SDK polling initialized and Temporal
+  connectivity available within two seconds (or the shorter request deadline).
+  A synchronized-invalid graph can be ready for diagnosis but reject new starts.
 
-Handler errors are JSON with a single `error` field and no sensitive internal details:
+## Safe errors
 
-- **400**: `{"error":"malformed request"}` — unexpected body bytes, body read error, or malformed idempotency header.
-- **503**: `{"error":"service unavailable"}` — new start with invalid/unsynchronized registry, unavailable Temporal, failed duplicate resolution, or ambiguous timeout.
-- **404**: `{"error":"run not found"}` — unknown run on GET.
-- **500**: `{"error":"internal error"}` — unexpected internal errors, including invalid durable metadata. No raw downstream error text is exposed.
+Start/status errors use a single `error` field:
 
-Keep endpoints bound/forwarded to localhost. Liveness is independent of Temporal;
-process readiness additionally requires initialized SDK polling. A synchronized
-invalid graph may be ready for diagnostics but still rejects new starts. Discovery
-can expose a valid partial rollout: wait for the intended worker names **and hash**,
-not just ready/nonempty, before selecting a new plan.
+- 400 `malformed request`: unexpected body or malformed idempotency header.
+- 503 `service unavailable`: unavailable graph/Temporal, failed duplicate lookup
+  or ambiguous timeout; never proof that execution was not accepted.
+- 404 `run not found`: unknown execution on GET.
+- 500 `internal error`: unexpected failures, including invalid durable metadata.
 
-## Local verification
-
-```sh
-mise exec -- go test ./services/orchestrator/api ./services/orchestrator/runs
-mise exec -- go test -race ./services/orchestrator/...
-mise run validate
-```
-
-Tests use scoped Gomega assertions with standard `testing.T`, real handlers/services, and narrow fakes only at registry/Temporal boundaries. No live Temporal server or Kubernetes cluster is required. Existing cumulative CI runs all Go packages via the unchanged shared mise setup and `mise run validate`.
+Graph validation uses its structured diagnostic response, not the run error
+schema. Internal exceptions and credentials are never returned as run errors.

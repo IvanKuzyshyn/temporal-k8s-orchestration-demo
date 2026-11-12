@@ -1,6 +1,7 @@
 # Temporal Kubernetes orchestration demo — design
 
-Status: Approved
+Status: Historical — superseded by `2026-11-11-minimal-demo-design.md`.
+Old deployment modes and experimental commands below are not supported entrypoints.
 Date: 2026-10-17
 Repository: `IvanKuzyshyn/temporal-k8s-orchestration-demo`
 
