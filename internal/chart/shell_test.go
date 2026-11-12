@@ -35,7 +35,7 @@ func TestCumulativeShellSyntaxChecksEveryScript(t *testing.T) {
 			for _, tool := range []string{"go", "gofmt", "git", "mise"} {
 				g.Expect(os.WriteFile(filepath.Join(root, "tools", tool), []byte("#!/bin/sh\nexit 0\n"), 0755)).To(gomega.Succeed())
 			}
-			for _, script := range []string{"a-first.sh", "compose.sh", "z-last.sh"} {
+			for _, script := range []string{"a-first.sh", "validate-manifests.sh", "z-last.sh"} {
 				content := "#!/bin/bash\n:\n"
 				if malformed && script == "z-last.sh" {
 					content = "if\n"

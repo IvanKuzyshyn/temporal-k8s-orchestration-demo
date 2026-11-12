@@ -22,163 +22,42 @@ run = "bash scripts/local.sh down"
 description = "DESTRUCTIVE: delete the owned demo cluster and all local workflow history"
 run = "bash scripts/local.sh destroy"
 
-[tasks."test:integration"]
-description = "Verify the full demo lifecycle on a newly created disposable cluster (refuses an existing demo)"
-run = "bash scripts/test-demo.sh"
-
 [tasks.test]
-description = "Run all Go tests with the race detector"
 run = "go test -race ./..."
 
-[tasks."test:manifests"]
-description = "Test complete rendered graph extraction and real CLI fixture exit/output contracts"
-run = "go test -race ./internal/manifest ./cmd/validate-graph"
+[tasks."test:integration"]
+description = "Test the full lifecycle on a new disposable cluster; refuses existing demo resources"
+run = "bash scripts/test-demo.sh"
 
 [tasks.validate]
-description = "Check Go/race/vet, Kyverno policies, Helm/full graph and Compose config without a cluster"
 run = '''
 set -eu
 files=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
-if [ -n "$files" ]; then
-  printf 'Go files need gofmt:\n%s\n' "$files"
-  exit 1
-fi
+if [ -n "$files" ]; then printf 'Go files need gofmt:\n%s\n' "$files"; exit 1; fi
 go test -race ./...
 go vet ./...
-go test -race -count=1 -tags=integration,resilience_integration -run '^Test(HistoryAssertionsSensitivity|ActivityPodSelection|WorkerRestoreKeepsNativeReplicas|SnapshotCleanupFailurePaths|StartIntentOwnership)$' ./tests/integration
-for script in scripts/*.sh; do
-  bash -n "$script"
-done
-mise run test:manifests
-mise run policies:test
-mise run validate:manifests
-bash scripts/compose.sh config
+for script in scripts/*.sh; do bash -n "$script"; done
+bash scripts/validate-manifests.sh
 '''
 
-[tasks."policies:test"]
-description = "Evaluate admission CREATE/UPDATE/DELETE and generated schema with the pinned Kyverno CLI"
-run = "go test -count=1 -v ./k8s/policies/tests"
-
-[tasks."policies:install"]
-description = "Install only owned worker admission and registration policies on the ready demo"
-run = "bash scripts/policies-install.sh"
-
-[tasks."test:policies-integration"]
-description = "Prove admission and registration lifecycle in temporary namespaces on the retained demo"
-run = '''
-bash -euo pipefail -c '
-source scripts/kind-common.sh
-assert_context
-export POLICIES_ROOT="$ROOT"
-go test -count=1 -tags=integration,policies_integration -run "^TestDiscoveryPolicy$" -v -timeout=20m ./tests/integration
-'
-'''
-
+# Transitional baseline entrypoints removed with the static mode in stack step 5.
 [tasks."k8s:up"]
-description = "Create if absent and apply the complete fixed-replica kind demo; preserve history on rerun"
 run = "bash scripts/k8s-up.sh"
-
 [tasks."k8s:down"]
-description = "DESTRUCTIVE: delete ONLY temporal-demo and ALL its PVC history"
 run = "bash scripts/k8s-down.sh"
-
-[tasks."validate:manifests"]
-run = "bash scripts/validate-manifests.sh"
-
-[tasks."validate:k8s"]
-description = "Strict API validation against the already ready owned kind cluster; no bootstrap"
-run = "bash scripts/validate-k8s.sh"
-
-[tasks."test:kind-validation"]
-run = "bash scripts/kind-validation.sh"
-
 [tasks."api:forward"]
 run = '''
 bash -euo pipefail -c '
 source scripts/kind-common.sh
 assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  -n temporal-demo-orchestrator port-forward --address 127.0.0.1 \
-  service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
 '
 '''
-
 [tasks."ui:forward"]
 run = '''
 bash -euo pipefail -c '
 source scripts/kind-common.sh
 assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  -n temporal port-forward --address 127.0.0.1 \
-  service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
+exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal port-forward --address 127.0.0.1 service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
 '
 '''
-
-[tasks."test:kind-baseline"]
-run = "bash scripts/kind-integration.sh baseline"
-
-[tasks."test:scaling"]
-description = "Prove native Temporal scaling on the retained owned kind cluster"
-run = "bash scripts/scaling.sh test"
-
-[tasks."apps:deploy-scaling"]
-description = "Install native KEDA scaling, bootstrapping zero only on first installation"
-run = "bash scripts/scaling.sh deploy"
-
-[tasks."apps:deploy-discovery"]
-description = "Deploy explicit live registry mode after policy readiness, with fixed workers and scoped rollback"
-run = "bash scripts/discovery.sh deploy"
-
-[tasks."test:registry"]
-description = "Uncached live registry lifecycle, invalid pre-start protection, keyed replay and permission recovery"
-run = "bash scripts/discovery.sh test"
-
-[tasks."test:rbac"]
-description = "Uncached actual orchestrator impersonation allow/deny checks for every registry scope and verb"
-run = "bash scripts/discovery.sh rbac"
-
-[tasks.smoke]
-description = "Uncached combined live-discovery diamond from zero, histories/replay and return to zero"
-run = "bash scripts/smoke.sh"
-
-[tasks."test:resilience"]
-description = "Bounded snapshot isolation and recovery on the retained stack, with exact rollback"
-run = "bash scripts/smoke.sh resilience"
-
-[tasks."test:kind-persistence"]
-run = "bash scripts/kind-integration.sh persistence"
-
-[tasks."kind:diagnostics"]
-run = "bash scripts/kind-diagnostics.sh"
-
-[tasks."images:build"]
-description = "Build both app images with a clean Git SHA or unique dirty local tag"
-run = "bash scripts/compose.sh build"
-
-[tasks."compose:up"]
-description = "Build and start the PostgreSQL-backed local demo, waiting for readiness"
-run = "bash scripts/compose.sh up"
-
-[tasks."compose:smoke"]
-description = "Assert a real diamond, durable replay and zero-body HTTP contract"
-run = "bash scripts/compose-smoke.sh"
-
-[tasks."compose:persistence"]
-description = "Verify restarts, replacement, schema rerun and isolated destructive reset"
-run = "bash scripts/compose-persistence.sh"
-
-[tasks."compose:down"]
-description = "Stop this project, preserving its PostgreSQL history volume"
-run = "bash scripts/compose.sh down"
-
-[tasks."compose:reset"]
-description = "DESTRUCTIVE: remove this project's history (requires RESET_CONFIRM=1)"
-run = "bash scripts/compose.sh reset"
-
-[tasks."compose:cleanup"]
-description = "CI job-scoped cleanup; aggregate discovery/reset failures without skipping normal cleanup"
-run = "bash scripts/compose-cleanup.sh"
-
-[tasks."compose:config"]
-description = "Validate Compose configuration without rendering credentials"
-run = "bash scripts/compose.sh config"

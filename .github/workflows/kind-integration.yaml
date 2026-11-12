@@ -8,116 +8,21 @@ permissions:
   contents: read
 
 jobs:
-  baseline-persistence:
+  full-demo:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           set-safe-directory: false
       - uses: ./.github/actions/setup-mise
-      - name: Cumulative Go, chart, complete graph and Compose configuration (no cluster)
-        run: mise run validate
-      - run: mise run k8s:up
-      - run: mise run k8s:up
-      - run: mise run validate:k8s
-      - name: Real API validation acceptance
-        shell: bash
-        run: mise run test:kind-validation
-      - name: Baseline and retained-history identity
-        shell: bash
-        run: |
-          mise run test:kind-baseline | tee .local/ci-baseline.log
-          grep -F '{"workflowId":' .local/ci-baseline.log > .local/history-before-reset.json
-      - run: mise run test:kind-persistence
-      - name: Kyverno admission and native registration lifecycle
-        run: |
-          mise run policies:install
-          mise run test:policies-integration
-      - name: Native Temporal activation, completion, zero and delayed activity retry
-        env:
-          # Long interruption is required locally and included on manual dispatch.
-          SCALING_SKIP_LONG: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
-        run: |
-          mise run apps:deploy-scaling
-          mise run test:scaling
-      - name: Live registry lifecycle, pre-start protection and least-privilege RBAC
-        shell: bash
-        run: |
-          mise run apps:deploy-discovery
-          trap '
-            rc=$?
-            if [[ -f .local/task9/static-baseline/identity ]]; then
-              mise exec -- bash scripts/discovery.sh restore || rc=1
-            fi
-            exit "$rc"
-          ' EXIT
-          mise run test:registry
-          mise run test:rbac
-      - name: Combined live discovery and native-scaling diamond
-        shell: bash
-        run: |
-          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
-          mise run smoke
-      - name: Longer snapshot and recovery experiments
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
-          mise run test:resilience
-      - name: Destructive reset ONLY on this disposable runner (including idempotent down)
-        run: |
-          mise run k8s:down
-          mise run k8s:down
-          mise run k8s:up
-      - name: Old history is absent after explicit reset
-        shell: mise exec -- bash --noprofile --norc -eo pipefail {0}
-        run: |
-          export KUBECONFIG="$PWD/.local/kubeconfig"
-          kubectl --context kind-temporal-demo -n temporal-demo-orchestrator \
-            port-forward --address 127.0.0.1 service/orchestrator 18080:8080 \
-            >.local/reset-forward.log 2>&1 &
-          pid=$!
-          trap '
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-          ' EXIT
-
-          ready=false
-          for ((i = 0; i < 60; i++)); do
-            if curl -fsS --max-time 2 http://127.0.0.1:18080/readyz >/dev/null 2>&1; then
-              ready=true
-              break
-            fi
-            sleep 1
-          done
-          [[ $ready == true ]]
-          id=$(jq -er .workflowId .local/history-before-reset.json)
-          code=$(curl -sS --max-time 10 -o .local/reset-result.json \
-            -w '%{http_code}' "http://127.0.0.1:18080/runs/$id")
-          [[ $code == 404 ]]
-          echo 'PASS: old workflow history is absent (404) after explicit cluster reset'
-      - run: mise run test:kind-baseline
-      - name: Repeat combined smoke after disposable runner recreation
-        shell: bash
-        run: |
-          mise run policies:install
-          export TASK10_TRUSTED_UID=$(mise exec -- kubectl --kubeconfig "$PWD/.local/kubeconfig" --context kind-temporal-demo get namespace kube-system -o jsonpath='{.metadata.uid}')
-          mise run smoke
-      - name: Scoped secret-free failure diagnostics
-        if: failure()
-        run: mise run kind:diagnostics
-      - name: Preserve secret-free combined acceptance evidence
+      - name: Full demo, scale-to-zero, idempotency and stop/resume
+        run: mise run test:integration
+      - name: Cleanup verified owned cluster after cancellation
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: task10-kind-evidence
-          path: |
-            .local/task10-smoke-*
-            .local/task10-resilience-*
-          include-hidden-files: true
-          if-no-files-found: ignore
-      - name: Always delete ONLY temporal-demo cluster and its local PVC
-        if: always()
-        run: mise run k8s:down
+        shell: bash
+        run: |
+          if [[ -s .local/lifecycle/node-id && ! -e .local/lifecycle.lock ]]; then
+            mise run destroy
+          fi

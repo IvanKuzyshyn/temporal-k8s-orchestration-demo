@@ -1,5 +1,5 @@
 # PostgreSQL, schema bootstrap, Temporal and UI. Phases are applied by k8s-up.sh.
-# ConfigMap inputs copied verbatim from deploy/temporal; regression-tested for parity.
+# Kubernetes ConfigMaps are the sole source of Temporal bootstrap inputs.
 apiVersion: v1
 kind: Namespace
 metadata:
