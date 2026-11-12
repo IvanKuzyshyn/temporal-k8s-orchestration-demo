@@ -21,6 +21,7 @@ func New(provider registry.Provider, service *runs.Service, ready func(context.C
 	r := chi.NewRouter()
 	r.Post("/runs", h.start)
 	r.Get("/runs/{workflowID}", h.get)
+	r.Get("/graph", h.graph)
 	r.Get("/workers", func(w http.ResponseWriter, r *http.Request) { respond(w, http.StatusOK, provider.Snapshot()) })
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok"})

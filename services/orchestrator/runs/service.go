@@ -7,11 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"reflect"
-	"strings"
 
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/contracts"
-	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/plan"
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/registry"
 )
 
@@ -83,9 +80,9 @@ func (s *Service) Start(ctx context.Context, key string) (Run, error) {
 		}
 		id = "run-" + hex.EncodeToString(random[:])
 	}
-	inputPlan, err := validatedCopy(s.provider.Snapshot())
+	inputPlan, err := registry.ValidateSnapshot(s.provider.Snapshot())
 	if err != nil {
-		return Run{}, err
+		return Run{}, ErrInvalidRegistry
 	}
 	run, err := s.gateway.Start(ctx, id, contracts.ParentInput{Plan: inputPlan})
 	if errors.Is(err, ErrAlreadyExists) && key != "" {
@@ -108,26 +105,6 @@ func (s *Service) Get(ctx context.Context, id string) (Run, error) {
 	return e.Run, err
 }
 
-// Rebuild from a private copy using the shared authority. Reject noncanonical
-// snapshots rather than trusting a provider's Problems flag or cached hash.
-func validatedCopy(snapshot registry.Snapshot) (plan.Plan, error) {
-	if !snapshot.Synced || len(snapshot.Problems) > 0 {
-		return plan.Plan{}, ErrInvalidRegistry
-	}
-	p := snapshot.Plan
-	p.Nodes = append([]plan.Node(nil), p.Nodes...)
-	registrations := make([]plan.Registration, 0, len(p.Nodes))
-	for i, n := range p.Nodes {
-		n.Dependencies = append([]string(nil), n.Dependencies...)
-		p.Nodes[i] = n
-		registrations = append(registrations, plan.Registration{SchemaVersion: p.SchemaVersion, WorkerName: n.Name, TaskQueue: n.TaskQueue, WorkflowType: n.WorkflowType, RunAfter: strings.Join(n.Dependencies, ","), SourceServiceName: n.Name, SourceServiceNamespace: n.Name})
-	}
-	canonical, err := plan.Build(registrations)
-	if err != nil || !reflect.DeepEqual(canonical, p) {
-		return plan.Plan{}, ErrInvalidRegistry
-	}
-	return p, nil
-}
 func validHash(h string) bool {
 	if len(h) != 64 {
 		return false

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/registry"
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/services/orchestrator/runs"
 	"github.com/go-chi/chi/v5"
 )
@@ -54,6 +55,26 @@ func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, http.StatusOK, run)
 }
+func (h handlers) graph(w http.ResponseWriter, r *http.Request) {
+	snapshot := h.provider.Snapshot()
+	_, err := registry.ValidateSnapshot(snapshot)
+	problems := append([]string{}, snapshot.Problems...)
+	status := http.StatusOK
+	if err != nil {
+		status = http.StatusUnprocessableEntity
+		if len(problems) == 0 {
+			problems = append(problems, err.Error())
+		}
+	}
+	if !snapshot.Synced {
+		status = http.StatusServiceUnavailable
+	}
+	respond(w, status, struct {
+		registry.Snapshot
+		Valid bool `json:"valid"`
+	}{Snapshot: registry.Snapshot{Plan: snapshot.Plan, Synced: snapshot.Synced, Problems: problems}, Valid: err == nil})
+}
+
 func (h handlers) readiness(w http.ResponseWriter, r *http.Request) {
 	if !h.provider.Snapshot().Synced || h.ready == nil {
 		fail(w, http.StatusServiceUnavailable, "not ready")
