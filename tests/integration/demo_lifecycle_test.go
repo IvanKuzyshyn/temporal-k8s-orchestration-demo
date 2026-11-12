@@ -72,6 +72,11 @@ func TestDemoLifecycle(t *testing.T) {
 		}
 		t.Fatalf("timed out: %s", label)
 	}
+	if !t.Run("CELPolicyLifecycle", func(t *testing.T) { demoCheckPolicyLifecycle(t, root) }) {
+		t.Fatal("CEL policy lifecycle failed")
+	}
+	// Fixture cleanup is asynchronous from discovery's perspective.
+	command("bash", "scripts/wait-graph.sh", api, filepath.Join(root, ".local/lifecycle/expected-workers.json"))
 	p := demoPlan(t)
 	status, b, e := request("GET", "/graph", "", nil)
 	if e != nil || status != 200 {
