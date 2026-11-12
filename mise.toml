@@ -22,6 +22,10 @@ run = "bash scripts/local.sh down"
 description = "DESTRUCTIVE: delete the owned demo cluster and all local workflow history"
 run = "bash scripts/local.sh destroy"
 
+[tasks."test:integration"]
+description = "Verify the full demo lifecycle on a newly created disposable cluster (refuses an existing demo)"
+run = "bash scripts/test-demo.sh"
+
 [tasks.test]
 description = "Run all Go tests with the race detector"
 run = "go test -race ./..."
