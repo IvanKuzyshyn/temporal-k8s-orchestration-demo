@@ -57,8 +57,8 @@ job. Only Validate runs the complete fast suite. Kind invokes the public lifecyc
 runner, which refuses preexisting resources, checks real workflow histories and
 scaling, repeats stop/resume, tests durable replay and destroys its owned demo.
 
-Workflows use pull_request/workflow_dispatch, never pull_request_target. Token
-permission is contents:read. External checkout and mise actions are SHA-pinned;
+Workflows run on pushes to main (including merged PRs), pull_request and
+workflow_dispatch, never pull_request_target. Token permission is contents:read. External checkout and mise actions are SHA-pinned;
 checkout credential persistence is disabled. No write token, OIDC or deployment
 permission is requested. Kubeconfigs, Secret data and credential files are not
 uploaded as artifacts. Console diagnostics are scoped and avoid raw SQL Job logs.
