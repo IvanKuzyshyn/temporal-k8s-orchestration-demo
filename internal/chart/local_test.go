@@ -9,31 +9,6 @@ import (
 	"testing"
 )
 
-func TestFullLocalChart(t *testing.T) {
-	for _, bootstrap := range []string{"true", "false"} {
-		cmd := exec.Command("helm", "template", "temporal-demo", "../../k8s/worker-helm-chart", "-f", "../../k8s/worker-helm-chart/values-local.yaml", "--set", "scaling.bootstrapZero="+bootstrap)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("render: %v\n%s", err, out)
-		}
-		text := string(out)
-		for _, want := range []string{"value: \"kubernetes\"", "kind: RoleBinding", "kind: ScaledObject", "minReplicaCount: 0"} {
-			if !strings.Contains(text, want) {
-				t.Errorf("missing %s", want)
-			}
-		}
-		if strings.Contains(text, "name: static-registry") {
-			t.Error("static registry in full setup")
-		}
-		if got := strings.Count(text, "  replicas: 0"); (bootstrap == "true" && got != 4) || (bootstrap == "false" && got != 0) {
-			t.Errorf("bootstrap %s: zero replica specs %d", bootstrap, got)
-		}
-		if strings.Count(text, "  replicas: 1") != 1 {
-			t.Error("only orchestrator may own fixed replicas")
-		}
-	}
-}
-
 // External Docker/kind boundaries are simulated; the real lifecycle script must
 // choose the safe operation and preserve local data on down.
 func TestLocalLifecycleOwnership(t *testing.T) {

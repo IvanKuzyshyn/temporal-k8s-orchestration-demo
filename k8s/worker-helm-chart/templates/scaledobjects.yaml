@@ -1,4 +1,3 @@
-{{- if .Values.scaling.enabled }}
 {{- range .Values.workers }}
 ---
 apiVersion: keda.sh/v1alpha1
@@ -25,6 +24,5 @@ spec:
         activationTargetQueueSize: "0"
         targetQueueSize: "1"
         enableTLS: "false"
-        includeRunningWorkflowCount: {{ $.Values.scaling.includeRunningWorkflowCount | quote }}
-{{- end }}
+        includeRunningWorkflowCount: "false"
 {{- end }}

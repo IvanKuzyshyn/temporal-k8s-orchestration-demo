@@ -15,7 +15,7 @@ func TestScalingRender(t *testing.T) {
 	for _, bootstrap := range []string{"true", "false"} {
 		t.Run(bootstrap, func(t *testing.T) {
 			g := gomega.NewWithT(t)
-			b, err := render(t, "-f", "../../k8s/worker-helm-chart/values-scaling.yaml", "--set", "scaling.bootstrapZero="+bootstrap)
+			b, err := render(t, "--set", "scaling.bootstrapZero="+bootstrap)
 			g.Expect(err).NotTo(gomega.HaveOccurred(), string(b))
 			dec := yaml.NewDecoder(bytes.NewReader(b))
 			scalers, workers := 0, 0
@@ -64,11 +64,4 @@ func TestScalingRender(t *testing.T) {
 			g.Expect(workers).To(gomega.Equal(scalers))
 		})
 	}
-}
-
-func TestRunningCountOptIn(t *testing.T) {
-	g := gomega.NewWithT(t)
-	b, err := render(t, "-f", "../../k8s/worker-helm-chart/values-scaling.yaml", "--set", "scaling.includeRunningWorkflowCount=true")
-	g.Expect(err).NotTo(gomega.HaveOccurred(), string(b))
-	g.Expect(bytes.Count(b, []byte(`includeRunningWorkflowCount: "true"`))).To(gomega.Equal(4))
 }

@@ -16,6 +16,8 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // The double models the documented SDK boundary: a fatal hook runs off-poller,
@@ -59,8 +61,6 @@ func TestFatalWorkerStopsRunAndAdmission(t *testing.T) {
 				switch key {
 				case "HTTP_ADDR":
 					return addr
-				case "REGISTRY_FILE":
-					return "../../deploy/config/workers.json"
 				}
 				return ""
 			})
@@ -79,7 +79,7 @@ func TestFatalWorkerStopsRunAndAdmission(t *testing.T) {
 				result <- run(ctx, "orchestrator", c, slog.New(slog.NewTextHandler(io.Discard, nil)),
 					func(context.Context, client.Options) (client.Client, error) { return tc, nil },
 					func(_ client.Client, _ string, o worker.Options) worker.Worker { opts <- o; return w },
-					inClusterClient,
+					func() (kubernetes.Interface, error) { return fake.NewClientset(), nil },
 				)
 			}()
 			var options worker.Options

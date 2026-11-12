@@ -25,16 +25,10 @@ spec:
     metadata:
       labels:
         app: orchestrator
-      annotations:
-        checksum/registry: {{ include (print $.Template.BasePath "/static-registry.yaml") . | sha256sum }}
     spec:
       enableServiceLinks: false
-      {{- if eq .Values.registry.mode "kubernetes" }}
       serviceAccountName: orchestrator
       automountServiceAccountToken: true
-      {{- else }}
-      automountServiceAccountToken: false
-      {{- end }}
       terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
@@ -62,15 +56,8 @@ spec:
               value: default
             - name: TASK_QUEUE
               value: orchestrator.v1.temporal
-            - name: REGISTRY_MODE
-              value: {{ .Values.registry.mode | quote }}
-            {{- if eq .Values.registry.mode "kubernetes" }}
             - name: WORKER_NAMESPACE_SELECTOR
               value: {{ .Values.registry.namespaceSelector | quote }}
-            {{- else }}
-            - name: REGISTRY_FILE
-              value: /etc/demo/workers.json
-            {{- end }}
             - name: HTTP_ADDR
               value: :8080
           readinessProbe:
@@ -90,13 +77,3 @@ spec:
             limits:
               cpu: 500m
               memory: 128Mi
-          {{- if eq .Values.registry.mode "static" }}
-          volumeMounts:
-            - name: registry
-              mountPath: /etc/demo
-              readOnly: true
-      volumes:
-        - name: registry
-          configMap:
-            name: static-registry
-          {{- end }}

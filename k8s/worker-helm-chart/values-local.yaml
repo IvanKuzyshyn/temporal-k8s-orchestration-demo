@@ -1,6 +1,0 @@
-# Persistent full local demo: live discovery and native scale-to-zero.
-registry:
-  mode: kubernetes
-scaling:
-  enabled: true
-  bootstrapZero: false

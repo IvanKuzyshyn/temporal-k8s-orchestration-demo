@@ -39,25 +39,3 @@ go vet ./...
 for script in scripts/*.sh; do bash -n "$script"; done
 bash scripts/validate-manifests.sh
 '''
-
-# Transitional baseline entrypoints removed with the static mode in stack step 5.
-[tasks."k8s:up"]
-run = "bash scripts/k8s-up.sh"
-[tasks."k8s:down"]
-run = "bash scripts/k8s-down.sh"
-[tasks."api:forward"]
-run = '''
-bash -euo pipefail -c '
-source scripts/kind-common.sh
-assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal-demo-orchestrator port-forward --address 127.0.0.1 service/orchestrator "${API_FORWARD_PORT:-18080}:8080"
-'
-'''
-[tasks."ui:forward"]
-run = '''
-bash -euo pipefail -c '
-source scripts/kind-common.sh
-assert_context
-exec kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n temporal port-forward --address 127.0.0.1 service/temporal-ui "${UI_FORWARD_PORT:-18088}:8080"
-'
-'''

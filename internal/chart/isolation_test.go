@@ -11,16 +11,12 @@ import (
 // A user kubeconfig must never be used even for destructive commands. This
 // executes the real guard; no Kubernetes/Docker mutation is needed or allowed.
 func TestForeignKubeconfigFailsClosed(t *testing.T) {
-	for _, script := range []string{"k8s-down.sh", "k8s-up.sh", "local.sh", "kind-diagnostics.sh", "api:forward", "ui:forward"} {
+	for _, script := range []string{"k8s-up.sh", "local.sh", "kind-diagnostics.sh", "test-demo.sh"} {
 		t.Run(script, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 			foreign := filepath.Join(t.TempDir(), "config")
 			g.Expect(os.WriteFile(foreign, []byte("do-not-touch\n"), 0600)).To(gomega.Succeed())
 			cmd := exec.Command("bash", "../../scripts/"+script)
-			if script == "api:forward" || script == "ui:forward" {
-				cmd = exec.Command("mise", "run", script)
-				cmd.Dir = "../.."
-			}
 			cmd.Env = append(os.Environ(), "KUBECONFIG="+foreign)
 			b, err := cmd.CombinedOutput()
 			g.Expect(err).To(gomega.HaveOccurred())

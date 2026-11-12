@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/plan"
-	"github.com/IvanKuzyshyn/temporal-k8s-orchestration-demo/internal/registry"
 	"github.com/onsi/gomega"
 )
 
@@ -20,8 +19,8 @@ func fixture(t *testing.T, path string) string {
 }
 
 // Missing namespace resolution, wrong source metadata, queue derivation, or
-// dependency normalization must break parity with the independent static source.
-func TestDiamondMatchesStatic(t *testing.T) {
+// dependency normalization must preserve the independently specified diamond.
+func TestDiamond(t *testing.T) {
 	g := gomega.NewWithT(t)
 	r, err := Registrations(strings.NewReader(fixture(t, "valid/diamond.yaml")))
 	g.Expect(err).NotTo(gomega.HaveOccurred())
@@ -33,9 +32,7 @@ func TestDiamondMatchesStatic(t *testing.T) {
 	}))
 	p, err := plan.Build(r)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
-	static, err := registry.LoadStatic("../../deploy/config/workers.json")
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	g.Expect(p).To(gomega.Equal(static.Snapshot().Plan))
+	g.Expect(p.Hash).To(gomega.Equal("5fefcdcc52af25c9c21a523f1f3c1f7d928018051ffe89ac8b5a0e6ccf8c3b62"))
 	g.Expect(p.Nodes[3].Dependencies).To(gomega.Equal([]string{"worker-b", "worker-c"}))
 }
 

@@ -1,7 +1,7 @@
 // Package plan defines and validates the execution graph shared by registry adapters.
 package plan
 
-// Registration is schema-1 source metadata, shared by static and Kubernetes adapters.
+// Registration is schema-1 source metadata decoded from Kubernetes discovery.
 // Kubernetes adapters must additionally verify the actual ConfigMap namespace and UID.
 type Registration struct {
 	SchemaVersion          string `json:"schemaVersion"`

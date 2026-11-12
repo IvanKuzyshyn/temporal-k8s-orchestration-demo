@@ -126,10 +126,10 @@ done
 [[ $ready == true ]] || { echo 'Kubernetes API did not become ready' >&2; exit 1; }
 k wait --for=condition=Ready "node/$node" --timeout=180s
 if [[ ! -f $state/initialized ]]; then
-  bash scripts/k8s-up.sh full
+  bash scripts/k8s-up.sh
   touch "$state/initialized"
 fi
-# A repeat up resumes rather than redeploying or resetting active experiments.
+# A repeat up resumes rather than redeploying installed workloads.
 k -n temporal rollout status statefulset/postgres --timeout=180s
 for deployment in temporal temporal-ui; do
   k -n temporal rollout status "deployment/$deployment" --timeout=180s
