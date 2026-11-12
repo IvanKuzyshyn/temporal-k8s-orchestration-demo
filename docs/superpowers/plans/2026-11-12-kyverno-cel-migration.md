@@ -128,6 +128,16 @@ Pinned chart 3.9.2 serves both CEL policy kinds at v1. Kyverno 1.19.2 CLI passed
 
 Revert the migration commits and use the guarded destroy/recreate flow on the owned demo cluster. Do not apply legacy and new generators concurrently. Rollback also discards local demo history and requires full verification; it is not an in-place ownership handoff.
 
+## Execution evidence (2026-11-12)
+
+All six tasks implemented in a GitHub stack, one PR per task. Kyverno/chart/CLI pins, RBAC, and application code remain unchanged.
+
+- Tasks 1–4: pinned API probes and race-enabled Go suite passed; admission and generation identity tests failed before conversion and passed afterward; installer/resume regressions failed before changing legacy references and passed afterward.
+- Task 5: full disposable integration passed repeatedly. A deliberate `synchronize.enabled: false` mutation failed `CELPolicyLifecycle` with a registration reconciliation timeout; restored policy passed. Legacy-instance absence checks separate stdout from stderr because querying the deprecated endpoint itself emits a warning even when the resource is absent.
+- Task 6: `mise run validate` passed; final full integration passed in 426.97s (CEL policy subtest 9.14s). Fresh `mise run up` and repeated `mise run up` passed. Both policies reported `.status.conditionStatus.ready=true`; all four registrations retained their UIDs and data across repeated startup; `/graph` was synchronized and valid. Fresh startup log had no ClusterPolicy deprecation warning.
+- Environment: macOS arm64, Docker aarch64. No pre-existing demo cluster was present; all verification clusters were created by this worktree with ownership checks intact.
+- Review: author self-review only; no independent reviewer tool is available. PRs remain unmerged for human review.
+
 ## Planning review
 
 Self-review: all specified behaviors map to Tasks 2–5; both installation and warm startup are covered; integration preflight ordering is explicit; version compatibility is a gate rather than an assumed field mapping. No subagent review tool is available in this session, so this is a self-reviewed plan. No implementation or runtime verification has been performed by preparing this document.

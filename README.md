@@ -51,6 +51,13 @@ Repeated `up` resumes installed images; it does not upgrade them. To deploy sour
 changes or upgrade an older installation, explicitly `destroy` then `up`—**this
 loses local history**. Lifecycle commands refuse clusters owned by another checkout.
 
+This also applies to the **Kyverno CEL policy migration**: older demos installed
+`ClusterPolicy` resources, while current source uses `ValidatingPolicy` and
+`GeneratingPolicy`. An initialized cluster skips bootstrap on repeated `up`, so
+it will not migrate those policies. Run `mise run destroy` from the owning
+checkout, then `mise run up` from the checkout you want to use. Do not run both
+old and new generation policies against the same registrations.
+
 ## Run a workflow and inspect the graph
 
 ```sh
