@@ -72,6 +72,18 @@ func TestFullDemoDefault(t *testing.T) {
 							g.Expect(spec).NotTo(gomega.HaveKey("replicas"))
 						}
 					}
+				case "ScaledObject":
+					spec := obj["spec"].(map[string]any)
+					g.Expect(meta["namespace"]).To(gomega.Equal("temporal-demo-" + name))
+					g.Expect(spec["scaleTargetRef"]).To(gomega.Equal(map[string]any{"name": name}))
+					g.Expect(spec["minReplicaCount"]).To(gomega.Equal(0))
+					g.Expect(spec["maxReplicaCount"]).To(gomega.Equal(1))
+					g.Expect(spec["pollingInterval"]).To(gomega.Equal(5))
+					g.Expect(spec["cooldownPeriod"]).To(gomega.Equal(120))
+					g.Expect(spec["triggers"]).To(gomega.Equal([]any{map[string]any{"type": "temporal", "metadata": map[string]any{
+						"endpoint": "temporal.temporal.svc.cluster.local:7233", "namespace": "default", "taskQueue": name + ".v1.temporal",
+						"queueTypes": "workflow,activity", "activationTargetQueueSize": "0", "targetQueueSize": "1", "enableTLS": "false", "includeRunningWorkflowCount": "false",
+					}}}))
 				case "Role", "ClusterRole":
 					res := "configmaps"
 					if kind == "ClusterRole" {
