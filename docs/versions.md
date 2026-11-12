@@ -22,8 +22,11 @@ KEDA's [2.21 support matrix](https://keda.sh/docs/2.21/operate/cluster/) include
 Kubernetes 1.35. The [Temporal scaler](https://keda.sh/docs/2.21/scalers/temporal/)
 supports both workflow and activity backlog; this demo fixes running-workflow
 count off. Supported API versions and available multi-architecture images alone
-do not prove runtime acceptance. Kyverno ClusterPolicy deprecation warnings remain
-visible rather than hidden.
+do not prove runtime acceptance. The demo uses Kyverno CEL `ValidatingPolicy` and
+`GeneratingPolicy` at `policies.kyverno.io/v1`, supported by the unchanged 1.19.2
+CLI/controller and 3.9.2 chart pins. CLI tests fail on deprecation warnings;
+startup uses no legacy policy instances. The upstream chart still includes legacy
+CRDs, which are not themselves legacy policy instances.
 
 Chart checksums are verified even on cache hits. Exact archives:
 [KEDA](https://kedacore.github.io/charts/keda-2.21.0.tgz) and
@@ -37,11 +40,13 @@ credentials and lifecycle state.
 
 ## Evidence and limitations
 
-The preceding lifecycle implementation was exercised locally on macOS ARM64 with
-Linux ARM64 Docker containers. Minimal-demo changes have race-enabled Go/chart/
-policy validation and app image builds on that host. Its existing developer demo
-was deliberately retained: the new disposable runner correctly refused to reuse
-or delete it, so this is **not** a fresh minimal-demo live ARM64 acceptance claim.
+The CEL migration was exercised locally on macOS ARM64 with Linux ARM64 Docker
+containers. The race-enabled Go/chart/CLI suite and the full disposable kind
+lifecycle passed, including real CEL admission, generation/synchronization,
+opt-out/deletion, existing-source generation, workflow histories, scaling and
+stop/resume. Disabling generation synchronization deliberately failed the new
+live subtest; restoring it passed. This is local evidence for this migration,
+not a claim of universal platform support.
 
 The new full lifecycle scenario passed on disposable Ubuntu 24.04 Linux CI at
 step 4, commit `fa2e96e`:

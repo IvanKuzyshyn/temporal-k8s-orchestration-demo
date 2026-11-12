@@ -22,7 +22,10 @@ needed. Initial controller chart downloads require network access.
 - `internal/registry`: decoding, copy isolation, initial synchronization,
   reconnect/relist/list-attempt/namespace-view barriers and permission loss.
   These cover different race conditions, not interchangeable copies.
-- `k8s/policies/tests`: actual pinned CLI admission and generation contracts.
+- `k8s/policies/tests`: actual pinned CLI CEL admission and generation contracts,
+  with deprecation warnings treated as errors. Shared dependency parser fixtures,
+  every Go whitespace character, optional annotations, scope exclusions, raw
+  dependency preservation, and all registration data fields are exercised.
 - Workflow/activity tests: diamond scheduling, input/result identities, retry,
   heartbeat, cancellation and misrouting behavior.
 
@@ -66,7 +69,16 @@ CI or explicitly prepare a separate Docker environment; never reset a retained
 user cluster to satisfy a test preflight.
 
 The runner invokes the public `up`, then `TestDemoLifecycle` under the dedicated
-`demo_integration` tag. It checks generated registrations and essential RBAC,
+`demo_integration` tag. Its `CELPolicyLifecycle` subtest checks live admission
+(including invalid existing objects), source updates, generated-resource repair,
+worker opt-out, source deletion/recreation and UID replacement. An isolated copy
+of the generator tests existing-source generation and policy-deletion cleanup
+without changing the demo policy. Fixture namespaces are removed before graph
+assertions. It checks new policy readiness, absence of the legacy policy instances,
+and no ClusterPolicy deprecation warning in fresh startup logs. A deliberate
+`synchronize.enabled: false` mutation was verified to fail this subtest.
+
+The remaining scenario checks generated registrations and essential RBAC,
 zero real worker Pods, an unkeyed body-free POST, child histories and diamond
 ordering, return to zero, completed keyed replay, repeated up/down, node stop,
 retained PVC/credential identities and replay after resume, then another new run.

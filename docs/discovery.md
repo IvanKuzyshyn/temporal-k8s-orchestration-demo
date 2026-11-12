@@ -14,13 +14,32 @@ have `temporal-demo.io/worker-namespace: "true"`. Selected Services declare:
 The policy derives task queue `<worker-name>.v1.temporal` and fixes workflow type
 `ExampleChildWorkflow`; these are not separate Service annotations.
 
-The pinned Kyverno policy validates registration fields, then generates a
+Kyverno 1.19.2 uses two CEL policies at `policies.kyverno.io/v1`:
+`ValidatingPolicy/temporal-validate-workers` enforces registration fields on
+Service CREATE/UPDATE, and `GeneratingPolicy/temporal-generate-registrations`
+generates a
 same-namespace `temporal-worker-<service>` ConfigMap containing workerName,
 taskQueue, workflowType, runAfter, sourceServiceName, sourceServiceUID,
 sourceServiceNamespace and schemaVersion. ConfigMaps have
 `temporal-demo.io/registration: "true"`.
-Generation synchronizes source changes and generated resources carry ownership
-metadata. Do not manually edit generated registrations.
+Generation covers existing matching Services, synchronizes source changes, and
+repairs modified/deleted registrations. Removing the worker flag, setting it to
+`"false"`, or deleting the source Service removes its registration. Recreating a
+Service produces the new source UID; deleting the generating policy removes its
+downstream ConfigMaps. Generated resources carry ownership metadata. Do not
+manually edit generated registrations.
+
+Admission distinguishes an absent flag from an empty/invalid value; only exact
+`"true"` and `"false"` values are allowed when present. True workers may omit
+dependencies or use whitespace-only text, but nonempty dependency lists cannot
+contain empty entries, invalid Service names, or self-reference. Trimming agrees
+with Go's Unicode `strings.TrimSpace`; duplicate dependencies remain valid. The
+ConfigMap preserves raw dependency text; graph construction normalizes it.
+
+Policy readiness is `.status.conditionStatus.ready`, checked during installation
+and every `up`. This migration does not upgrade the pinned Kyverno controller or
+CLI. Existing legacy clusters require the explicit reset documented in the
+[README](../README.md#start-and-stop), not an in-place policy handoff.
 
 Kyverno does not generate Deployments or ScaledObjects; Helm creates those. Worker
 Pods disable service-account token automount. Orchestrator RBAC lists/watches
