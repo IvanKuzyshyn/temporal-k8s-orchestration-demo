@@ -2,6 +2,7 @@
 set -euo pipefail
 source "$(dirname "$0")/kind-common.sh"
 source k8s/infrastructure/versions.env
+source scripts/local-output.sh
 (($# == 0)) || { echo 'Internal bootstrap takes no mode arguments' >&2; exit 2; }
 mkdir -p .local
 clusters=$(kind get clusters)
@@ -27,11 +28,14 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 # Verify and render both pinned controllers before mutations; installation uses the API.
+demo_phase 'Preparing pinned KEDA and Kyverno controllers…'
 for controller in keda kyverno; do
   bash scripts/render-controller.sh "$controller" >"$work/$controller.yaml"
 done
 k wait --for=condition=Ready node/temporal-demo-control-plane --timeout=120s
 
+demo_phase_done
+demo_phase 'Starting PostgreSQL and initializing Temporal…'
 # Labels let kubectl apply ordinary manifests in explicit bootstrap phases.
 k apply -f k8s/infrastructure/temporal.yaml -f "$work/keda.yaml" -l temporal-demo.io/phase=namespace
 k apply -f "$work/kyverno.yaml" -l temporal-demo.io/phase=namespace
@@ -75,6 +79,8 @@ k -n temporal rollout status deployment/temporal-ui --timeout=120s
 # avoiding SSA conflicts on API-defaulted fields from the old Helm install.
 # KEDA 2.21.0 exposes custom controller labels but not CRD labels. Its native
 # CRD labels omit instance; every controller has instance=keda (tested offline).
+demo_phase_done
+demo_phase 'Installing KEDA and Kyverno controllers…'
 keda_crds='app.kubernetes.io/part-of=keda-operator,!app.kubernetes.io/instance'
 k apply --server-side --field-manager=temporal-demo -f "$work/keda.yaml" -l "$keda_crds"
 k apply --server-side --field-manager=temporal-demo -f "$work/kyverno.yaml" -l temporal-demo.io/phase=crds
@@ -104,6 +110,8 @@ done
 }
 
 # Build the two applications and load them into the owned kind node.
+demo_phase_done
+demo_phase 'Building and loading application images…'
 tag=$(git rev-parse HEAD)
 if [[ -n $(git status --porcelain) ]]; then
   tag="$tag-local-$(date +%s)-$(openssl rand -hex 4)"
@@ -111,6 +119,8 @@ fi
 docker build -f deploy/orchestrator.Dockerfile -t "temporal-demo/orchestrator:$tag" .
 docker build -f deploy/worker.Dockerfile -t "temporal-demo/worker:$tag" .
 kind load docker-image --name "$CLUSTER" "temporal-demo/orchestrator:$tag" "temporal-demo/worker:$tag"
+demo_phase_done
+demo_phase 'Installing worker discovery and scale-to-zero workloads…'
 bootstrap=false
 bash scripts/policies-install.sh
 # Never take replica ownership back on a partial-bootstrap retry.
@@ -154,4 +164,5 @@ k -n temporal-demo-orchestrator rollout status deployment/orchestrator --timeout
   for worker in worker-a worker-b worker-c worker-d; do
     k -n "temporal-demo-$worker" wait --for=condition=Ready "scaledobject/$worker" --timeout=180s
   done
+  demo_phase_done
   echo 'PASS: full local discovery/scaling deployed; history retained'

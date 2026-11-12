@@ -20,7 +20,7 @@ func TestLocalLifecycleOwnership(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, file := range []string{"local.sh", "kind-common.sh"} {
+			for _, file := range []string{"local.sh", "local-output.sh", "kind-common.sh"} {
 				b, err := os.ReadFile("../../scripts/" + file)
 				if err != nil {
 					t.Fatal(err)
