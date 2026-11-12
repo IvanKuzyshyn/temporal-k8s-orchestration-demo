@@ -148,14 +148,14 @@ start_forward api temporal-demo-orchestrator orchestrator "$api_port"
 start_forward ui temporal temporal-ui "$ui_port"
 api="http://127.0.0.1:$api_port"
 ui="http://127.0.0.1:$ui_port"
-echo 'Waiting for the complete worker registry and API/UI readiness...'
+echo 'Waiting for API/UI readiness...'
 ready=false
 for ((i=0; i<90; i++)); do
   if curl -fs --max-time 3 "$api/readyz" >/dev/null &&
-     curl -fs --max-time 3 "$api/workers" | jq -e --arg hash "$(<"$state/plan-hash")" \
-       '.synced == true and .plan.hash == $hash and ([.plan.nodes[].name] | sort) == ["worker-a","worker-b","worker-c","worker-d"] and (.problems | length) == 0' >/dev/null &&
      curl -fs --max-time 3 "$ui/" >/dev/null; then ready=true; break; fi
   sleep 2
 done
-[[ $ready == true ]] || { echo 'Full registry/API/UI readiness did not converge' >&2; exit 1; }
+[[ $ready == true ]] || { echo 'API/UI readiness did not converge' >&2; exit 1; }
+echo 'Waiting up to 120 seconds for the complete worker graph...'
+bash scripts/wait-graph.sh "$api" "$state/expected-workers.json"
 printf '\nTemporal UI: %s\nAPI:         %s\n\nTrigger a workflow:\ncurl -fsS -X POST %s/runs\n\nStop (retain data): mise run down\nDelete all demo data: mise run destroy\n' "$ui" "$api" "$api"
