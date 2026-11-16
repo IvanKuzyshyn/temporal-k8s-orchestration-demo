@@ -12,6 +12,10 @@ worker-a             worker-d
            worker-c
 ```
 
+## Note
+
+This repository is part of the article [Building Durable Agents with Temporal](https://www.kuzyshyn.me/articles/building-durable-agents-with-temporal).
+
 ## How it works
 
 - **kind** runs the local Kubernetes cluster in Docker.
